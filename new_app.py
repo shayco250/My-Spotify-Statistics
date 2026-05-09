@@ -23,31 +23,32 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("Spotify Analytics - Raw Data Edition 🎧")
-st.markdown("[My Profile](https://open.spotify.com/user/i7e5xyvpz9pb9ya5jo7el03rr?si=8ec4243115094741)")
+
+st.info("🔒 Your data is processed in real-time in the server's memory and is not saved to any database.")
+
+user_profile_link = st.text_input("🔗 Enter your Spotify Profile Link (Optional):", "")
+if user_profile_link:
+    st.markdown(f"[My Profile]({user_profile_link})")
+
+uploaded_files = st.file_uploader("📂 Upload your Spotify Extended Streaming History JSON files:", type="json", accept_multiple_files=True)
+
 st.markdown("---")
 
 # ==========================================
 # Data Loading (Adapted for Raw Spotify History)
 # ==========================================
 @st.cache_data
-def load_data():
-    import os
-    import glob
-    folder_path = r"C:\Users\shayc\Desktop\Spotify Project\GUY DATA"
-    
-    all_files = glob.glob(os.path.join(folder_path, "*.json"))
-    
-    if not all_files:
-        st.error(f"לא נמצאו קבצי JSON בתיקייה: {folder_path}")
+def load_data(files):
+    if not files:
         return pd.DataFrame()
 
     dfs = []
-    for f in all_files:
+    for f in files:
         try:
             df_temp = pd.read_json(f)
             dfs.append(df_temp)
         except Exception as e:
-            st.error(f"Error loading file {os.path.basename(f)}: {e}")
+            st.error(f"Error loading file {f.name}: {e}")
             
     if not dfs:
         return pd.DataFrame()
@@ -141,9 +142,14 @@ def calculate_obsession(history_df, ref_date):
     stats['Obsession Score'] = stats['Obsession Score'].round(2)
     return stats.sort_values('Obsession Score', ascending=False)
 
+if uploaded_files:
+    if st.button("🚀 Show My Spotify Statistics"):
+        st.session_state['data_loaded'] = True
 
-with st.spinner("Loading Spotify Data..."):
-    raw_df = load_data()
+raw_df = None
+if st.session_state.get('data_loaded', False) and uploaded_files:
+    with st.spinner("Analyzing your Spotify History..."):
+        raw_df = load_data(uploaded_files)
 
 
 # ==========================================
