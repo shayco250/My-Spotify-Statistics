@@ -26,11 +26,12 @@ st.title("Spotify Analytics 🎧")
 
 st.info("🔒 Your data is processed in real-time in the server's memory and is not saved to any database.")
 
-user_profile_link = st.text_input("🔗 Enter your Spotify Profile Link (Optional):", "")
-if user_profile_link:
-    st.markdown(f"[My Profile]({user_profile_link})")
-
 uploaded_files = st.file_uploader("📂 Upload your Spotify Extended Streaming History JSON files:", type="json", accept_multiple_files=True)
+
+if uploaded_files:
+    user_profile_link = st.text_input("🔗 Enter your Spotify Profile Link (Optional):", "")
+    if user_profile_link:
+        st.markdown(f"[My Profile]({user_profile_link})")
 
 st.markdown("---")
 
