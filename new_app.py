@@ -22,7 +22,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("Spotify Analytics - Raw Data Edition 🎧")
+st.title("Spotify Analytics 🎧")
 
 st.info("🔒 Your data is processed in real-time in the server's memory and is not saved to any database.")
 
