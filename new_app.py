@@ -153,7 +153,7 @@ def load_data(files, cid, csecret):
                 for i in range(0, total, chunk_size):
                     chunk = valid_ids[i:i+chunk_size]
                     try:
-                        results = sp.tracks(chunk)
+                        results = sp.tracks(chunk, market='US')
                         for track in results['tracks']:
                             if track is not None:
                                 uri = track.get('uri')
