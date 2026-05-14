@@ -246,12 +246,13 @@ def calculate_obsession(history_df, ref_date):
 
 if uploaded_files:
     if st.button("🚀 Show My Spotify Statistics"):
+        with st.spinner("Analyzing your Spotify History..."):
+            st.session_state['raw_df'] = load_data(uploaded_files, client_id, client_secret)
         st.session_state['data_loaded'] = True
 
 raw_df = None
-if st.session_state.get('data_loaded', False) and uploaded_files:
-    with st.spinner("Analyzing your Spotify History..."):
-        raw_df = load_data(uploaded_files, client_id, client_secret)
+if st.session_state.get('data_loaded', False) and 'raw_df' in st.session_state:
+    raw_df = st.session_state['raw_df']
 
 
 # ==========================================
@@ -775,14 +776,14 @@ if raw_df is not None and not raw_df.empty:
         song_metadata = df.drop_duplicates('isrc')[['isrc', 'clean_track_name', 'canonical_artist']]
         
         # Adding a portion of the URI to disambiguate identical names from different URIs in the dropdown
-        song_list_dict = {f"{r['clean_track_name']} | {r['canonical_artist']} | {r['isrc'].split(':')[-1][:6]}": r['isrc'] for _, r in song_metadata.iterrows()}
+        song_list_dict = {f"{r['clean_track_name']} | {r['canonical_artist']} | {str(r['isrc']).split(':')[-1][:6]}": r['isrc'] for _, r in song_metadata.iterrows()}
         song_list_display = sorted(list(song_list_dict.keys()))
 
         top_song_display = ""
         if not top_song_grouped.empty:
             t_uri = top_song_grouped.index[0]
             t_row = song_metadata[song_metadata['isrc'] == t_uri].iloc[0]
-            top_song_display = f"{t_row['clean_track_name']} | {t_row['canonical_artist']} | {t_row['isrc'].split(':')[-1][:6]}"
+            top_song_display = f"{t_row['clean_track_name']} | {t_row['canonical_artist']} | {str(t_row['isrc']).split(':')[-1][:6]}"
         
         default_song_idx = song_list_display.index(top_song_display) if top_song_display in song_list_display else 0
 
