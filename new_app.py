@@ -1,4 +1,7 @@
 import streamlit as st
+import time
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -26,6 +29,33 @@ st.title("Spotify Analytics 🎧")
 
 st.info("🔒 Your data is processed in real-time in the server's memory and is not saved to any database.")
 
+with st.expander("🔑 HOW TO GET MY CLIENT ID AND CLIENT SECRET (Required for accurate Track Matching)"):
+    st.markdown('''
+    To accurately count your songs, this app uses the **Spotify Developer API** to fetch the ISRC (a unique ID) for each track. 
+    **Why?** Because Spotify often changes a song\'s internal ID depending on whether it\'s a single, album, or compilation.
+    
+    **Is it secure?** YES! 🔒
+    - We do NOT ask for your Spotify password.
+    - We do NOT access your personal account data, playlists, or private history.
+    - We ONLY use these keys to search Spotify\'s *public* database for song information.
+    - Your keys are used locally and are never saved to our servers.
+
+    **How to get them (Takes 1 minute):**
+    1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and log in.
+    2. Click on **Create app**.
+    3. App name: `Spotify Stats Analyzer` (or anything). App description: `Data analysis`.
+    4. Redirect URI: `http://localhost:8501`
+    5. Check the Developer Terms of Service and click **Save**.
+    6. Click on your new app, then go to **Settings**.
+    7. You will see your **Client ID** and an option to view your **Client Secret**. Copy them and paste them below!
+    ''')
+    
+col_keys1, col_keys2 = st.columns(2)
+with col_keys1:
+    client_id = st.text_input("🔑 Spotify Client ID:", type="password")
+with col_keys2:
+    client_secret = st.text_input("🔑 Spotify Client Secret:", type="password")
+
 uploaded_files = st.file_uploader("📂 Upload your Spotify Extended Streaming History JSON files:", type="json", accept_multiple_files=True)
 
 user_profile_link = st.text_input("🔗 Enter your Spotify Profile Link (Optional):", "")
@@ -38,7 +68,7 @@ st.markdown("---")
 # Data Loading (Adapted for Raw Spotify History)
 # ==========================================
 @st.cache_data
-def load_data(files):
+def load_data(files, cid, csecret):
     if not files:
         return pd.DataFrame()
 
@@ -94,13 +124,53 @@ def load_data(files):
     else:
         df['spotify_track_uri'] = df['spotify_track_uri'].fillna('local:' + df['clean_track_name'] + '-' + df['canonical_artist'])
 
-    # Map each URI to a definitive track name and artist name for clean displays
-    uri_meta = df.groupby('spotify_track_uri').agg({
+    unique_uris = df['spotify_track_uri'].dropna().unique().tolist()
+    
+    if cid and csecret:
+        try:
+            auth_manager = SpotifyClientCredentials(client_id=cid, client_secret=csecret)
+            sp = spotipy.Spotify(auth_manager=auth_manager)
+            
+            uri_to_isrc = {}
+            valid_uris = [uri for uri in unique_uris if str(uri).startswith('spotify:track:')]
+            
+            progress_text = "Fetching unique track codes (ISRC) from Spotify... Please wait."
+            my_bar = st.progress(0, text=progress_text)
+            
+            total = len(valid_uris)
+            chunk_size = 50
+            for i in range(0, total, chunk_size):
+                chunk = valid_uris[i:i+chunk_size]
+                try:
+                    results = sp.tracks(chunk)
+                    for track in results['tracks']:
+                        if track is not None:
+                            uri = track.get('uri')
+                            isrc = track.get('external_ids', {}).get('isrc')
+                            if uri and isrc:
+                                uri_to_isrc[uri] = isrc
+                except Exception as e:
+                    time.sleep(1)
+                
+                progress = min(1.0, (i + chunk_size) / total)
+                my_bar.progress(progress, text=f"Fetching ISRCs... {min(i+chunk_size, total)} / {total}")
+                time.sleep(0.1)
+                
+            my_bar.empty()
+            df['isrc'] = df['spotify_track_uri'].map(uri_to_isrc).fillna(df['spotify_track_uri'])
+        except Exception as e:
+            st.error(f"Failed to authenticate with Spotify: {e}")
+            df['isrc'] = df['spotify_track_uri']
+    else:
+        df['isrc'] = df['spotify_track_uri']
+
+    # Map each ISRC to a definitive track name and artist name for clean displays
+    uri_meta = df.groupby('isrc').agg({
         'clean_track_name': 'first',
         'canonical_artist': 'first'
     }).to_dict()
-    df['clean_track_name'] = df['spotify_track_uri'].map(uri_meta['clean_track_name'])
-    df['canonical_artist'] = df['spotify_track_uri'].map(uri_meta['canonical_artist'])
+    df['clean_track_name'] = df['isrc'].map(uri_meta['clean_track_name'])
+    df['canonical_artist'] = df['isrc'].map(uri_meta['canonical_artist'])
 
     df = df.sort_values('ts').reset_index(drop=True)
     df['time_diff'] = df['ts'].diff()
@@ -114,7 +184,7 @@ def calculate_obsession(history_df, ref_date):
     if history_df.empty: return pd.DataFrame()
     ref_date = pd.to_datetime(ref_date)
 
-    stats = history_df.groupby('spotify_track_uri').agg(
+    stats = history_df.groupby('isrc').agg(
         clean_track_name=('clean_track_name', 'first'),
         canonical_artist=('canonical_artist', 'first'),
         first_play=('ts', 'min'),
@@ -149,7 +219,7 @@ if uploaded_files:
 raw_df = None
 if st.session_state.get('data_loaded', False) and uploaded_files:
     with st.spinner("Analyzing your Spotify History..."):
-        raw_df = load_data(uploaded_files)
+        raw_df = load_data(uploaded_files, client_id, client_secret)
 
 
 # ==========================================
@@ -230,17 +300,17 @@ if raw_df is not None and not raw_df.empty:
         total_streams = len(df)
         c2.metric("Total Streams", f"{total_streams:,}")
 
-        unique_songs = df['spotify_track_uri'].nunique()
+        unique_songs = df['isrc'].nunique()
         c3.metric("Unique Songs", f"{unique_songs:,}")
 
         unique_artists_count = df_artists['all artists'].nunique()
         c4.metric("Unique Artists", f"{unique_artists_count:,}")
 
-        top_song_grouped = df.groupby('spotify_track_uri').size().sort_values(ascending=False)
+        top_song_grouped = df.groupby('isrc').size().sort_values(ascending=False)
         if not top_song_grouped.empty:
             top_song_uri = top_song_grouped.index[0]
             top_song_plays = top_song_grouped.iloc[0]
-            top_song_name = df[df['spotify_track_uri'] == top_song_uri]['clean_track_name'].iloc[0]
+            top_song_name = df[df['isrc'] == top_song_uri]['clean_track_name'].iloc[0]
             c5.metric("Top Song", f"{top_song_name}", f"{top_song_plays} plays")
 
         st.markdown("---")
@@ -257,14 +327,14 @@ if raw_df is not None and not raw_df.empty:
             top_n_songs = st.slider("Tracks to Display", min_value=5, max_value=100, value=10, step=5, key='slider_tracks')
             st.subheader("🎵 Top Tracks")
             
-            top_songs_df = df.groupby('spotify_track_uri').agg(
+            top_songs_df = df.groupby('isrc').agg(
                 plays=('ts', 'count'),
                 Track_Name=('clean_track_name', 'first'),
                 Lead_Artist=('canonical_artist', 'first')
             ).reset_index()
 
-            track_hours_all = df_all.groupby('spotify_track_uri')['length_hours'].sum()
-            top_songs_df['total_hours'] = top_songs_df['spotify_track_uri'].map(track_hours_all).fillna(0)
+            track_hours_all = df_all.groupby('isrc')['length_hours'].sum()
+            top_songs_df['total_hours'] = top_songs_df['isrc'].map(track_hours_all).fillna(0)
 
             top_songs_df = top_songs_df.sort_values(by='plays', ascending=False).head(top_n_songs)
             top_songs_df.insert(0, '#', range(1, len(top_songs_df) + 1))
@@ -285,7 +355,7 @@ if raw_df is not None and not raw_df.empty:
             
             top_artists_df = df_artists.groupby('all artists').agg(
                 plays=('ts', 'count'),
-                unique_songs=('spotify_track_uri', 'nunique')
+                unique_songs=('isrc', 'nunique')
             ).reset_index()
 
             artist_hours_all = df_artists_all.groupby('all artists')['length_hours'].sum()
@@ -568,7 +638,7 @@ if raw_df is not None and not raw_df.empty:
 
         if st.button("🎲 Generate Recommended Playlist", use_container_width=False):
             full_obsession = calculate_obsession(df, pd.Timestamp.today())
-            full_top_songs = df.groupby('spotify_track_uri').agg(
+            full_top_songs = df.groupby('isrc').agg(
                 plays=('ts', 'count'),
                 clean_track_name=('clean_track_name', 'first'),
                 canonical_artist=('canonical_artist', 'first')
@@ -670,17 +740,17 @@ if raw_df is not None and not raw_df.empty:
         # ==========================================
         st.header("🔍 Song Information")
 
-        song_metadata = df.drop_duplicates('spotify_track_uri')[['spotify_track_uri', 'clean_track_name', 'canonical_artist']]
+        song_metadata = df.drop_duplicates('isrc')[['isrc', 'clean_track_name', 'canonical_artist']]
         
         # Adding a portion of the URI to disambiguate identical names from different URIs in the dropdown
-        song_list_dict = {f"{r['clean_track_name']} | {r['canonical_artist']} | {r['spotify_track_uri'].split(':')[-1][:6]}": r['spotify_track_uri'] for _, r in song_metadata.iterrows()}
+        song_list_dict = {f"{r['clean_track_name']} | {r['canonical_artist']} | {r['isrc'].split(':')[-1][:6]}": r['isrc'] for _, r in song_metadata.iterrows()}
         song_list_display = sorted(list(song_list_dict.keys()))
 
         top_song_display = ""
         if not top_song_grouped.empty:
             t_uri = top_song_grouped.index[0]
-            t_row = song_metadata[song_metadata['spotify_track_uri'] == t_uri].iloc[0]
-            top_song_display = f"{t_row['clean_track_name']} | {t_row['canonical_artist']} | {t_row['spotify_track_uri'].split(':')[-1][:6]}"
+            t_row = song_metadata[song_metadata['isrc'] == t_uri].iloc[0]
+            top_song_display = f"{t_row['clean_track_name']} | {t_row['canonical_artist']} | {t_row['isrc'].split(':')[-1][:6]}"
         
         default_song_idx = song_list_display.index(top_song_display) if top_song_display in song_list_display else 0
 
@@ -688,11 +758,11 @@ if raw_df is not None and not raw_df.empty:
 
         if selected_combo:
             selected_uri = song_list_dict[selected_combo]
-            t_name = song_metadata[song_metadata['spotify_track_uri'] == selected_uri]['clean_track_name'].iloc[0]
-            a_name = song_metadata[song_metadata['spotify_track_uri'] == selected_uri]['canonical_artist'].iloc[0]
+            t_name = song_metadata[song_metadata['isrc'] == selected_uri]['clean_track_name'].iloc[0]
+            a_name = song_metadata[song_metadata['isrc'] == selected_uri]['canonical_artist'].iloc[0]
 
-            track_df = df[df['spotify_track_uri'] == selected_uri]
-            track_df_all = df_all[df_all['spotify_track_uri'] == selected_uri]
+            track_df = df[df['isrc'] == selected_uri]
+            track_df_all = df_all[df_all['isrc'] == selected_uri]
 
             t_plays = len(track_df)
             t_hours = track_df_all['length_hours'].sum()
@@ -794,7 +864,7 @@ if raw_df is not None and not raw_df.empty:
             a_plays = len(art_df)
             a_hours = art_df_all['length_hours'].sum()
             a_rank = top_artist_grouped.index.get_loc(selected_artist) + 1 if selected_artist in top_artist_grouped.index else "N/A"
-            a_unique = art_df['spotify_track_uri'].nunique()
+            a_unique = art_df['isrc'].nunique()
             
             st.write(f"### {selected_artist}")
             col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
@@ -943,8 +1013,8 @@ if raw_df is not None and not raw_df.empty:
         first_song_name = first_song_row['clean_track_name']
         first_song_date = first_song_row['ts'].strftime('%Y-%m-%d')
 
-        most_diverse_art = df_artists.groupby('all artists')['spotify_track_uri'].nunique().idxmax()
-        most_diverse_count = df_artists.groupby('all artists')['spotify_track_uri'].nunique().max()
+        most_diverse_art = df_artists.groupby('all artists')['isrc'].nunique().idxmax()
+        most_diverse_count = df_artists.groupby('all artists')['isrc'].nunique().max()
 
         streak_c1, streak_c2 = st.columns(2)
         streak_c1.success(f"**⚡ Current Streak:**\n\n {current_streak} Days")
