@@ -134,29 +134,58 @@ def load_data(files, cid, csecret):
             uri_to_isrc = {}
             valid_uris = [uri for uri in unique_uris if str(uri).startswith('spotify:track:')]
             
-            progress_text = "Fetching unique track codes (ISRC) from Spotify... Please wait."
-            my_bar = st.progress(0, text=progress_text)
+            # Use only the 22-character ID to avoid malformed URI errors
+            valid_ids = []
+            for uri in valid_uris:
+                track_id = uri.split(':')[-1]
+                if len(track_id) == 22:
+                    valid_ids.append(track_id)
             
-            total = len(valid_uris)
-            chunk_size = 50
-            for i in range(0, total, chunk_size):
-                chunk = valid_uris[i:i+chunk_size]
-                try:
-                    results = sp.tracks(chunk)
-                    for track in results['tracks']:
-                        if track is not None:
-                            uri = track.get('uri')
-                            isrc = track.get('external_ids', {}).get('isrc')
-                            if uri and isrc:
-                                uri_to_isrc[uri] = isrc
-                except Exception as e:
-                    time.sleep(1)
+            total = len(valid_ids)
+            if total > 0:
+                progress_text = "Fetching unique track codes (ISRC) from Spotify... Please wait."
+                my_bar = st.progress(0, text=progress_text)
                 
-                progress = min(1.0, (i + chunk_size) / total)
-                my_bar.progress(progress, text=f"Fetching ISRCs... {min(i+chunk_size, total)} / {total}")
-                time.sleep(0.1)
+                chunk_size = 50
+                start_time = time.time()
+                error_shown = False
                 
-            my_bar.empty()
+                for i in range(0, total, chunk_size):
+                    chunk = valid_ids[i:i+chunk_size]
+                    try:
+                        results = sp.tracks(chunk)
+                        for track in results['tracks']:
+                            if track is not None:
+                                uri = track.get('uri')
+                                isrc = track.get('external_ids', {}).get('isrc')
+                                if uri and isrc:
+                                    uri_to_isrc[uri] = isrc
+                    except Exception as e:
+                        if not error_shown:
+                            st.warning(f"Spotify API Error: {e} - Stopping ISRC fetch.")
+                            error_shown = True
+                        break  # Stop fetching if there's an API error (likely auth or bad request)
+                    
+                    processed = min(i + chunk_size, total)
+                    progress = processed / total
+                    
+                    elapsed = time.time() - start_time
+                    if processed > 0:
+                        est_total_time = (elapsed / processed) * total
+                        time_left = max(0, est_total_time - elapsed)
+                        # Round to nearest 30 seconds if requested, or just show seconds/minutes nicely
+                        if time_left > 60:
+                            time_str = f"{int(time_left // 60)}m {int(time_left % 60)}s"
+                        else:
+                            time_str = f"{int(time_left)}s"
+                    else:
+                        time_str = "Calculating..."
+                        
+                    percent = int(progress * 100)
+                    my_bar.progress(progress, text=f"Fetching ISRCs... {percent}% ({processed}/{total}) | Estimated Time Remaining: {time_str}")
+                    time.sleep(0.1)
+                    
+                my_bar.empty()
             df['isrc'] = df['spotify_track_uri'].map(uri_to_isrc).fillna(df['spotify_track_uri'])
         except Exception as e:
             st.error(f"Failed to authenticate with Spotify: {e}")
