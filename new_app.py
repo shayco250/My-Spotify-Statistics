@@ -133,6 +133,7 @@ def load_data(files, cid, csecret):
             
             uri_to_isrc = {}
             valid_uris = [uri for uri in unique_uris if str(uri).startswith('spotify:track:')]
+            from concurrent.futures import ThreadPoolExecutor, as_completed
             
             # Use only the 22-character ID to avoid malformed URI errors
             valid_ids = []
@@ -146,44 +147,41 @@ def load_data(files, cid, csecret):
                 progress_text = "Fetching unique track codes (ISRC) from Spotify... Please wait."
                 my_bar = st.progress(0, text=progress_text)
                 
-                chunk_size = 50
                 start_time = time.time()
-                error_shown = False
+                processed = 0
                 
-                for i in range(0, total, chunk_size):
-                    chunk = valid_ids[i:i+chunk_size]
+                def fetch_single_isrc(tid):
                     try:
-                        results = sp.tracks(chunk, market='US')
-                        for track in results['tracks']:
-                            if track is not None:
-                                uri = track.get('uri')
-                                isrc = track.get('external_ids', {}).get('isrc')
-                                if uri and isrc:
-                                    uri_to_isrc[uri] = isrc
+                        track_info = sp.track(tid)
+                        isrc_val = track_info.get('external_ids', {}).get('isrc')
+                        return (tid, isrc_val)
                     except Exception as e:
-                        if not error_shown:
-                            st.warning(f"Spotify API Error: {e} - Stopping ISRC fetch.")
-                            error_shown = True
-                        break  # Stop fetching if there's an API error (likely auth or bad request)
-                    
-                    processed = min(i + chunk_size, total)
-                    progress = processed / total
-                    
-                    elapsed = time.time() - start_time
-                    if processed > 0:
-                        est_total_time = (elapsed / processed) * total
-                        time_left = max(0, est_total_time - elapsed)
-                        # Round to nearest 30 seconds if requested, or just show seconds/minutes nicely
-                        if time_left > 60:
-                            time_str = f"{int(time_left // 60)}m {int(time_left % 60)}s"
-                        else:
-                            time_str = f"{int(time_left)}s"
-                    else:
-                        time_str = "Calculating..."
+                        return (tid, None)
+
+                # Fetching one by one concurrently because Spotify blocked the batch endpoint
+                with ThreadPoolExecutor(max_workers=15) as executor:
+                    futures = {executor.submit(fetch_single_isrc, tid): tid for tid in valid_ids}
+                    for future in as_completed(futures):
+                        tid, isrc_val = future.result()
+                        if isrc_val:
+                            full_uri = f"spotify:track:{tid}"
+                            uri_to_isrc[full_uri] = isrc_val
+                            
+                        processed += 1
                         
-                    percent = int(progress * 100)
-                    my_bar.progress(progress, text=f"Fetching ISRCs... {percent}% ({processed}/{total}) | Estimated Time Remaining: {time_str}")
-                    time.sleep(0.1)
+                        if processed % 10 == 0 or processed == total:
+                            progress = processed / total
+                            elapsed = time.time() - start_time
+                            est_total_time = (elapsed / processed) * total
+                            time_left = max(0, est_total_time - elapsed)
+                            
+                            if time_left > 60:
+                                time_str = f"{int(time_left // 60)}m {int(time_left % 60)}s"
+                            else:
+                                time_str = f"{int(time_left)}s"
+                                
+                            percent = int(progress * 100)
+                            my_bar.progress(progress, text=f"Fetching ISRCs (One-by-One)... {percent}% ({processed}/{total}) | ETA: {time_str}")
                     
                 my_bar.empty()
             df['isrc'] = df['spotify_track_uri'].map(uri_to_isrc).fillna(df['spotify_track_uri'])
