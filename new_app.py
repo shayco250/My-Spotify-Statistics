@@ -133,9 +133,17 @@ def load_data(files, cid, csecret):
             
             uri_to_isrc = {}
             valid_uris = [uri for uri in unique_uris if str(uri).startswith('spotify:track:')]
-            from concurrent.futures import ThreadPoolExecutor, as_completed
+            # --- SMART FILTERING ---
+            # To avoid 24-hour API bans, we ONLY fetch ISRC for track names that appear with MULTIPLE URIs
+            name_uri_counts = df.groupby('clean_track_name')['spotify_track_uri'].nunique()
+            duplicate_names = name_uri_counts[name_uri_counts > 1].index
             
-            # Use only the 22-character ID to avoid malformed URI errors
+            # URIs that belong to track names with multiple URIs
+            suspected_duplicates_df = df[df['clean_track_name'].isin(duplicate_names)]
+            unique_suspected_uris = suspected_duplicates_df['spotify_track_uri'].dropna().unique().tolist()
+            
+            valid_uris = [uri for uri in unique_suspected_uris if str(uri).startswith('spotify:track:')]
+            
             valid_ids = []
             for uri in valid_uris:
                 track_id = uri.split(':')[-1]
@@ -143,48 +151,49 @@ def load_data(files, cid, csecret):
                     valid_ids.append(track_id)
             
             total = len(valid_ids)
+            uri_to_isrc = {}
+            
             if total > 0:
-                progress_text = "Fetching unique track codes (ISRC) from Spotify... Please wait."
+                progress_text = f"Smart Scanning: Found {total} suspected duplicate tracks. Fetching verification from Spotify..."
                 my_bar = st.progress(0, text=progress_text)
                 
-                start_time = time.time()
-                processed = 0
+                # We do this sequentially to prevent Spotify 429 Anti-Spam blocks (which last 24h)
+                sp = spotipy.Spotify(auth_manager=auth_manager, retries=0, requests_timeout=5)
                 
-                def fetch_single_isrc(tid):
+                start_time = time.time()
+                for i, tid in enumerate(valid_ids):
                     try:
                         track_info = sp.track(tid)
                         isrc_val = track_info.get('external_ids', {}).get('isrc')
-                        return (tid, isrc_val)
-                    except Exception as e:
-                        return (tid, None)
-
-                # Fetching one by one concurrently because Spotify blocked the batch endpoint
-                with ThreadPoolExecutor(max_workers=15) as executor:
-                    futures = {executor.submit(fetch_single_isrc, tid): tid for tid in valid_ids}
-                    for future in as_completed(futures):
-                        tid, isrc_val = future.result()
                         if isrc_val:
                             full_uri = f"spotify:track:{tid}"
                             uri_to_isrc[full_uri] = isrc_val
-                            
-                        processed += 1
+                    except Exception as e:
+                        pass # Ignore individual errors to keep the loop moving
                         
-                        if processed % 10 == 0 or processed == total:
-                            progress = processed / total
-                            elapsed = time.time() - start_time
-                            est_total_time = (elapsed / processed) * total
-                            time_left = max(0, est_total_time - elapsed)
-                            
-                            if time_left > 60:
-                                time_str = f"{int(time_left // 60)}m {int(time_left % 60)}s"
-                            else:
-                                time_str = f"{int(time_left)}s"
-                                
-                            percent = int(progress * 100)
-                            my_bar.progress(progress, text=f"Fetching ISRCs (One-by-One)... {percent}% ({processed}/{total}) | ETA: {time_str}")
+                    # Safe sleep to respect API limits (~3-4 requests per second)
+                    time.sleep(0.3)
                     
+                    processed = i + 1
+                    if processed % 5 == 0 or processed == total:
+                        progress = processed / total
+                        elapsed = time.time() - start_time
+                        est_total_time = (elapsed / processed) * total
+                        time_left = max(0, est_total_time - elapsed)
+                        
+                        if time_left > 60:
+                            time_str = f"{int(time_left // 60)}m {int(time_left % 60)}s"
+                        else:
+                            time_str = f"{int(time_left)}s"
+                            
+                        percent = int(progress * 100)
+                        my_bar.progress(progress, text=f"Resolving Duplicates... {percent}% ({processed}/{total}) | ETA: {time_str}")
+                
                 my_bar.empty()
+            
+            # For tracks we fetched ISRC, use it. For everything else (the 95% of normal tracks), fallback to original URI
             df['isrc'] = df['spotify_track_uri'].map(uri_to_isrc).fillna(df['spotify_track_uri'])
+            
         except Exception as e:
             st.error(f"Failed to authenticate with Spotify: {e}")
             df['isrc'] = df['spotify_track_uri']
