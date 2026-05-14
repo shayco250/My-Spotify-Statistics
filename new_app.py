@@ -133,49 +133,43 @@ def load_data(files, cid, csecret):
             
             uri_to_isrc = {}
             valid_uris = [uri for uri in unique_uris if str(uri).startswith('spotify:track:')]
-            # --- SMART FILTERING ---
-            # To avoid 24-hour API bans, we ONLY fetch ISRC for track names that appear with MULTIPLE URIs
+            # --- SMART FILTERING VIA SEARCH ---
+            # To resolve completely different URIs/Artists for the same track, we use Spotify Search.
             name_uri_counts = df.groupby('clean_track_name')['spotify_track_uri'].nunique()
             duplicate_names = name_uri_counts[name_uri_counts > 1].index
             
-            # URIs that belong to track names with multiple URIs
             suspected_duplicates_df = df[df['clean_track_name'].isin(duplicate_names)]
-            unique_suspected_uris = suspected_duplicates_df['spotify_track_uri'].dropna().unique().tolist()
+            unique_pairs = suspected_duplicates_df[['clean_track_name', 'canonical_artist']].drop_duplicates().values.tolist()
             
-            valid_uris = [uri for uri in unique_suspected_uris if str(uri).startswith('spotify:track:')]
-            
-            valid_ids = []
-            for uri in valid_uris:
-                track_id = uri.split(':')[-1]
-                if len(track_id) == 22:
-                    valid_ids.append(track_id)
-            
-            total = len(valid_ids)
-            uri_to_isrc = {}
+            total = len(unique_pairs)
+            pair_to_isrc = {}
             
             if total > 0:
-                progress_text = f"Smart Scanning: Found {total} suspected duplicate tracks. Fetching verification from Spotify..."
+                progress_text = f"Smart Scanning: Resolving {total} combinations via Spotify Search..."
                 my_bar = st.progress(0, text=progress_text)
                 
-                # We do this sequentially to prevent Spotify 429 Anti-Spam blocks (which last 24h)
                 sp = spotipy.Spotify(auth_manager=auth_manager, retries=0, requests_timeout=5)
-                
                 start_time = time.time()
-                for i, tid in enumerate(valid_ids):
+                
+                for i, (t_name, a_name) in enumerate(unique_pairs):
                     try:
-                        track_info = sp.track(tid)
-                        isrc_val = track_info.get('external_ids', {}).get('isrc')
-                        if isrc_val:
-                            full_uri = f"spotify:track:{tid}"
-                            uri_to_isrc[full_uri] = isrc_val
+                        # Searching exactly like the user's python script
+                        # Taking the very first search result to extract the master ISRC
+                        q_str = f"artist:{a_name} track:{t_name}"
+                        results = sp.search(q=q_str, type='track', limit=1)
+                        tracks = results.get('tracks', {}).get('items', [])
+                        if tracks:
+                            isrc_val = tracks[0].get('external_ids', {}).get('isrc')
+                            if isrc_val:
+                                pair_to_isrc[(t_name, a_name)] = isrc_val
                     except Exception as e:
-                        pass # Ignore individual errors to keep the loop moving
+                        pass
                         
-                    # Safe sleep to respect API limits (~3-4 requests per second)
+                    # Safe sleep
                     time.sleep(0.3)
                     
                     processed = i + 1
-                    if processed % 5 == 0 or processed == total:
+                    if processed % 3 == 0 or processed == total:
                         progress = processed / total
                         elapsed = time.time() - start_time
                         est_total_time = (elapsed / processed) * total
@@ -191,8 +185,10 @@ def load_data(files, cid, csecret):
                 
                 my_bar.empty()
             
-            # For tracks we fetched ISRC, use it. For everything else (the 95% of normal tracks), fallback to original URI
-            df['isrc'] = df['spotify_track_uri'].map(uri_to_isrc).fillna(df['spotify_track_uri'])
+            # Map the results to the dataframe efficiently
+            # We create a tuple column just for mapping
+            pair_series = pd.Series(list(zip(df['clean_track_name'], df['canonical_artist'])))
+            df['isrc'] = pair_series.map(pair_to_isrc).fillna(df['spotify_track_uri'])
             
         except Exception as e:
             st.error(f"Failed to authenticate with Spotify: {e}")
