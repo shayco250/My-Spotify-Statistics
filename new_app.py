@@ -155,7 +155,7 @@ def load_data(files, cid, csecret):
                     try:
                         # Searching exactly like the user's python script
                         # Taking the very first search result to extract the master ISRC
-                        q_str = f"artist:{a_name} track:{t_name}"
+                        q_str = f'artist:"{a_name}" track:"{t_name}"'
                         results = sp.search(q=q_str, type='track', limit=1)
                         tracks = results.get('tracks', {}).get('items', [])
                         if tracks:
