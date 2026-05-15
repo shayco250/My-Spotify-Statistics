@@ -155,7 +155,7 @@ def load_data(files, cid, csecret):
                     try:
                         # Searching exactly like the user's python script
                         # Taking the very first search result to extract the master ISRC
-                        q_str = f'artist:"{a_name}" track:"{t_name}"'
+                        q_str = f"artist:{a_name} track:{t_name}"
                         results = sp.search(q=q_str, type='track', limit=1)
                         tracks = results.get('tracks', {}).get('items', [])
                         if tracks:
@@ -185,9 +185,10 @@ def load_data(files, cid, csecret):
                 
                 my_bar.empty()
             
-            # We use a list comprehension to assign back to df to prevent pandas index-alignment mismatch 
+            # Map the results to the dataframe efficiently using .values to prevent pandas index-alignment mismatch 
             # which happens because df might have a repeating/broken index before reset_index!
-            df['isrc'] = [pair_to_isrc.get((t, a), u) for t, a, u in zip(df['clean_track_name'], df['canonical_artist'], df['spotify_track_uri'])]
+            pair_series = pd.Series(list(zip(df['clean_track_name'], df['canonical_artist'])))
+            df['isrc'] = pair_series.map(pair_to_isrc).fillna(pd.Series(df['spotify_track_uri'].values)).values
             
         except Exception as e:
             st.error(f"Failed to authenticate with Spotify: {e}")
