@@ -191,10 +191,15 @@ def load_data(files, cid, csecret):
             df['isrc'] = pair_series.map(pair_to_isrc).fillna(pd.Series(df['spotify_track_uri'].values)).values
             
         except Exception as e:
-            st.error(f"Failed to authenticate with Spotify: {e}")
+            st.error(f"❌ Spotify API Error: {e}")
             df['isrc'] = df['spotify_track_uri']
     else:
         df['isrc'] = df['spotify_track_uri']
+
+    # --- DEBUG: show mapping summary (remove after confirming it works) ---
+    total_isrc = df['isrc'].nunique()
+    total_uri = df['spotify_track_uri'].nunique()
+    st.info(f"🔍 DEBUG: Unique URIs = {total_uri} | Unique ISRCs after mapping = {total_isrc} | ISRCs resolved = {len(df[df['isrc'] != df['spotify_track_uri']])}")
 
     # Map each ISRC to a definitive track name and artist name for clean displays
     uri_meta = df.groupby('isrc').agg({
