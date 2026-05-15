@@ -130,10 +130,8 @@ def load_data(files, cid, csecret):
         st.info(f"🔑 DEBUG: Credentials received. cid starts with: {cid[:6]}...")
         try:
             auth_manager = SpotifyClientCredentials(client_id=cid, client_secret=csecret)
-            sp = spotipy.Spotify(auth_manager=auth_manager)
-            # Quick test to see if credentials are valid
-            sp.search(q='test', type='track', limit=1)
-            st.success("✅ DEBUG: Spotify API connection successful!")
+            # Use a short timeout so invalid credentials fail fast instead of hanging
+            sp = spotipy.Spotify(auth_manager=auth_manager, requests_timeout=8, retries=0)
             
             uri_to_isrc = {}
             valid_uris = [uri for uri in unique_uris if str(uri).startswith('spotify:track:')]
