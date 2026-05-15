@@ -185,10 +185,9 @@ def load_data(files, cid, csecret):
                 
                 my_bar.empty()
             
-            # Map the results to the dataframe efficiently
-            # We create a tuple column just for mapping
-            pair_series = pd.Series(list(zip(df['clean_track_name'], df['canonical_artist'])))
-            df['isrc'] = pair_series.map(pair_to_isrc).fillna(df['spotify_track_uri'])
+            # We use a list comprehension to assign back to df to prevent pandas index-alignment mismatch 
+            # which happens because df might have a repeating/broken index before reset_index!
+            df['isrc'] = [pair_to_isrc.get((t, a), u) for t, a, u in zip(df['clean_track_name'], df['canonical_artist'], df['spotify_track_uri'])]
             
         except Exception as e:
             st.error(f"Failed to authenticate with Spotify: {e}")
@@ -882,7 +881,7 @@ if raw_df is not None and not raw_df.empty:
         # ==========================================
         st.header("🎤 Artist Information")
         
-        artist_list = sorted(df_artists['all artists'].unique().tolist())
+        artist_list = sorted([str(x) for x in df_artists['all artists'].dropna().unique().tolist()])
         
         top_artist_grouped = df_artists.groupby('all artists').size().sort_values(ascending=False)
         top_artist_str = top_artist_grouped.index[0] if not top_artist_grouped.empty else ""
