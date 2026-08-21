@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Listening Report</title>
+<meta name="description" content="Turn your Spotify Extended Streaming History into a full listening report. Runs entirely in your browser — nothing is uploaded.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/css/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%8E%BC</text></svg>">
+</head>
+<body>
+
+<div id="tooltip" class="tooltip" role="status" aria-live="polite"></div>
+
+<!-- ==================================================================
+     Stage 1 — upload
+     ================================================================== -->
+<main id="stage-upload" class="stage stage-upload">
+  <div class="upload-inner">
+    <p class="eyebrow">Runs entirely in your browser</p>
+    <h1>Your years in listening, unpacked.</h1>
+    <p class="lede">
+      Drop in the <strong>Extended Streaming History</strong> files Spotify sent you and get the
+      whole picture: what you played, when you played it, what you could not stop repeating,
+      and what you kept skipping.
+    </p>
+
+    <div class="upload-card">
+      <label class="field">
+        <span class="field-label">Your Spotify profile link <em>(optional)</em></span>
+        <input type="url" id="profile-link" placeholder="https://open.spotify.com/user/…" autocomplete="off">
+      </label>
+
+      <div class="dropzone" id="dropzone" tabindex="0" role="button"
+           aria-label="Upload your Spotify history JSON files">
+        <svg class="dz-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16"/>
+        </svg>
+        <p class="dz-title">Choose your files, or drag them here</p>
+        <p class="dz-hint">Streaming_History_Audio_*.json — select all of them at once</p>
+        <input type="file" id="file-input" accept=".json,application/json" multiple hidden>
+      </div>
+
+      <ul class="file-list" id="file-list" hidden></ul>
+
+      <label class="toggle">
+        <input type="checkbox" id="deep-match">
+        <span>
+          <strong>Deep matching</strong>
+          <em>Looks up release codes online to merge versions filed under different titles.
+             Adds a minute or two — the built-in matcher already handles most duplicates.</em>
+        </span>
+      </label>
+
+      <button class="btn btn-primary" id="analyze-btn" disabled>Build my report</button>
+
+      <p class="privacy">
+        <svg viewBox="0 0 24 24" aria-hidden="true" class="lock">
+          <path d="M6 10V8a6 6 0 1 1 12 0v2m-13 0h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z"/>
+        </svg>
+        Your files are read inside this tab and never leave your device. There is no server, no
+        account and no database.
+      </p>
+    </div>
+
+    <details class="how">
+      <summary>How do I get my listening history from Spotify?</summary>
+      <ol>
+        <li>Open <strong>Spotify → Account → Privacy settings</strong>.</li>
+        <li>Tick <strong>Extended streaming history</strong> and request the download.</li>
+        <li>Spotify emails you a zip within a few days. Unzip it.</li>
+        <li>Upload every <code>Streaming_History_Audio_*.json</code> file from that folder here.</li>
+      </ol>
+      <p class="note">The smaller <em>Account data</em> export only covers the last year and does not
+      contain enough detail for this report.</p>
+    </details>
+  </div>
+</main>
+
+<!-- ==================================================================
+     Stage 2 — loading
+     ================================================================== -->
+<div id="stage-loading" class="stage stage-loading" hidden>
+  <div class="loader-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+  <p class="loader-title" id="loader-title">Reading your history</p>
+  <p class="loader-sub" id="loader-sub">This happens on your device, so bigger exports take longer.</p>
+  <div class="progress" id="progress" hidden><div class="progress-bar" id="progress-bar"></div></div>
+</div>
+
+<!-- ==================================================================
+     Stage 3 — the report
+     ================================================================== -->
+<div id="stage-report" class="stage stage-report" hidden>
+
+  <header class="report-head">
+    <div>
+      <p class="eyebrow">Listening report</p>
+      <h1 class="report-title" id="report-range">—</h1>
+    </div>
+    <div class="head-actions">
+      <a id="profile-out" class="profile-out" href="#" hidden target="_blank" rel="noopener">Spotify profile ↗</a>
+      <button class="btn btn-quiet" id="restart-btn">Start over</button>
+    </div>
+  </header>
+
+  <!-- date filter ------------------------------------------------- -->
+  <section class="filters" aria-label="Date range">
+    <div class="filter-field">
+      <label for="year-quick">Jump to</label>
+      <select id="year-quick"></select>
+    </div>
+    <div class="filter-field">
+      <label for="date-start">From</label>
+      <input type="date" id="date-start">
+    </div>
+    <div class="filter-field">
+      <label for="date-end">To</label>
+      <input type="date" id="date-end">
+    </div>
+    <button class="btn btn-quiet" id="reset-dates">Reset</button>
+    <p class="filter-note" id="filter-note"></p>
+  </section>
+
+  <!-- headline ---------------------------------------------------- -->
+  <section class="hero" aria-label="At a glance">
+    <div class="hero-figure">
+      <span class="hero-number" id="hero-hours">0</span>
+      <span class="hero-unit">hours of music</span>
+    </div>
+    <p class="hero-line" id="hero-line"></p>
+    <div class="stat-strip">
+      <div class="stat"><span class="stat-label">Streams</span><span class="stat-value" id="stat-streams">—</span></div>
+      <div class="stat"><span class="stat-label">Different tracks</span><span class="stat-value" id="stat-tracks">—</span></div>
+      <div class="stat"><span class="stat-label">Artists</span><span class="stat-value" id="stat-artists">—</span></div>
+      <div class="stat"><span class="stat-label">Most played</span><span class="stat-value stat-value-text" id="stat-top">—</span></div>
+    </div>
+    <p class="merge-note" id="merge-note"></p>
+  </section>
+
+  <!-- leaderboards ------------------------------------------------ -->
+  <section class="panel-grid">
+    <section class="panel">
+      <header class="panel-head">
+        <h2>Most played tracks</h2>
+        <label class="inline-control">
+          Show
+          <select id="track-count"><option>10</option><option>25</option><option>50</option><option>100</option></select>
+        </label>
+      </header>
+      <div id="top-tracks"></div>
+    </section>
+
+    <section class="panel">
+      <header class="panel-head">
+        <h2>Most played artists</h2>
+        <label class="inline-control">
+          Show
+          <select id="artist-count"><option>10</option><option>25</option><option>50</option><option>100</option></select>
+        </label>
+      </header>
+      <div id="top-artists"></div>
+    </section>
+  </section>
+
+  <section class="panel-grid">
+    <section class="panel">
+      <header class="panel-head"><h2>Most played albums</h2></header>
+      <div id="top-albums"></div>
+    </section>
+
+    <section class="panel">
+      <header class="panel-head">
+        <h2>Where you listen</h2>
+        <p class="panel-sub">Share of plays by device</p>
+      </header>
+      <div class="donut-row">
+        <div id="platform-donut"></div>
+        <ul class="legend" id="platform-legend"></ul>
+      </div>
+    </section>
+  </section>
+
+  <!-- habits ------------------------------------------------------ -->
+  <section class="panel">
+    <header class="panel-head">
+      <h2>Listening habits</h2>
+      <p class="panel-sub">From the fields Spotify records alongside every play</p>
+    </header>
+    <div class="habit-grid">
+      <div class="habit">
+        <span class="habit-value" id="habit-skip">—</span>
+        <span class="habit-label">of plays skipped</span>
+        <span class="habit-detail" id="habit-skip-detail"></span>
+      </div>
+      <div class="habit">
+        <span class="habit-value" id="habit-shuffle">—</span>
+        <span class="habit-label">played on shuffle</span>
+        <span class="habit-detail">The rest you chose deliberately.</span>
+      </div>
+      <div class="habit">
+        <span class="habit-value" id="habit-offline">—</span>
+        <span class="habit-label">played offline</span>
+        <span class="habit-detail">Downloads, planes and dead zones.</span>
+      </div>
+      <div class="habit habit-wide">
+        <span class="habit-label">How your plays end</span>
+        <ul class="reason-list" id="habit-reasons"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- calendar ---------------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head">
+      <h2>Listening calendar</h2>
+      <label class="inline-control">Year <select id="calendar-year"></select></label>
+    </header>
+    <div class="scroll-x" id="calendar"></div>
+    <div class="heat-legend">
+      <span>Quieter</span>
+      <i class="hm-swatch" data-level="0"></i><i class="hm-swatch" data-level="1"></i>
+      <i class="hm-swatch" data-level="2"></i><i class="hm-swatch" data-level="3"></i>
+      <i class="hm-swatch" data-level="4"></i>
+      <span>Busier</span>
+    </div>
+  </section>
+
+  <!-- over time --------------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head">
+      <h2>Hours over time</h2>
+      <label class="inline-control">Year <select id="timeline-year"></select></label>
+    </header>
+    <div id="timeline"></div>
+  </section>
+
+  <!-- when -------------------------------------------------------- -->
+  <section class="panel-grid">
+    <section class="panel">
+      <header class="panel-head"><h2>Time of day</h2><p class="panel-sub" id="hour-peak"></p></header>
+      <div id="chart-hour"></div>
+    </section>
+    <section class="panel">
+      <header class="panel-head"><h2>Day of the week</h2><p class="panel-sub" id="dow-peak"></p></header>
+      <div id="chart-dow"></div>
+    </section>
+  </section>
+
+  <!-- obsession --------------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head">
+      <h2>On repeat</h2>
+      <label class="inline-control">
+        Show <select id="obsession-count"><option>15</option><option>25</option><option>50</option></select>
+      </label>
+    </header>
+    <p class="panel-sub panel-sub-block">
+      The tracks you cannot leave alone <em>right now</em> — not just the ones with the biggest
+      lifetime totals.
+    </p>
+    <details class="explain">
+      <summary>How the score works</summary>
+      <ul>
+        <li><strong>Spread (40%)</strong> — how many separate days you played it, measured against how long you have known it.</li>
+        <li><strong>Volume (35%)</strong> — total plays on a log scale, so a new favourite is not buried by an old giant.</li>
+        <li><strong>Recency (25%)</strong> — decays quickly once you stop reaching for it.</li>
+      </ul>
+      <p id="explain-example" class="note"></p>
+    </details>
+    <div id="obsession-list"></div>
+  </section>
+
+  <!-- playlist ---------------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head">
+      <h2>Playlist for right now</h2>
+      <div class="head-actions">
+        <button class="btn btn-quiet" id="copy-playlist" hidden>Copy list</button>
+        <button class="btn btn-primary btn-small" id="make-playlist">Build a 50-track playlist</button>
+      </div>
+    </header>
+    <p class="panel-sub panel-sub-block">
+      Half current obsessions, half long-standing favourites, shuffled so it is different every time.
+    </p>
+    <div id="playlist"></div>
+  </section>
+
+  <!-- sessions ---------------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head">
+      <h2>Listening sessions</h2>
+      <div class="head-actions">
+        <label class="inline-control">Year <select id="session-year"></select></label>
+        <label class="inline-control">Gap
+          <select id="session-gap">
+            <option value="1">1 hour</option><option value="2">2 hours</option>
+            <option value="3" selected>3 hours</option><option value="4">4 hours</option>
+            <option value="5">5 hours</option>
+          </select>
+        </label>
+      </div>
+    </header>
+    <p class="panel-sub panel-sub-block" id="session-summary"></p>
+    <div id="chart-sessions"></div>
+  </section>
+
+  <!-- track lookup ------------------------------------------------ -->
+  <section class="panel">
+    <header class="panel-head"><h2>Look up a track</h2></header>
+    <div class="search" data-search="track">
+      <input type="text" id="track-search" class="search-input" placeholder="Start typing a track or artist…"
+             autocomplete="off" role="combobox" aria-expanded="false" aria-controls="track-results">
+      <ul class="search-results" id="track-results" role="listbox" hidden></ul>
+    </div>
+    <div id="track-detail"></div>
+  </section>
+
+  <!-- artist lookup ----------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head"><h2>Look up an artist</h2></header>
+    <div class="search" data-search="artist">
+      <input type="text" id="artist-search" class="search-input" placeholder="Start typing an artist…"
+             autocomplete="off" role="combobox" aria-expanded="false" aria-controls="artist-results">
+      <ul class="search-results" id="artist-results" role="listbox" hidden></ul>
+    </div>
+    <div id="artist-detail"></div>
+  </section>
+
+  <!-- fun facts --------------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head"><h2>Odds and ends</h2></header>
+    <div id="time-travel" class="callout"></div>
+    <div class="fact-grid" id="fact-grid"></div>
+  </section>
+
+  <footer class="report-foot">
+    <p>Built from your own export. Nothing here was sent anywhere.</p>
+  </footer>
+</div>
+
+<script src="assets/js/processing.js"></script>
+<script src="assets/js/analytics.js"></script>
+<script src="assets/js/charts.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>

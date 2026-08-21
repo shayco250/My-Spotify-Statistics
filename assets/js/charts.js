@@ -1,0 +1,287 @@
+/* =============================================================================
+ * charts.js — hand-rolled SVG charts.
+ *
+ * No charting library: every mark is drawn here, so the page carries no
+ * megabyte-sized dependency and the charts inherit the site's own colour
+ * tokens in both light and dark themes.
+ *
+ * All renderers return an SVG string. Elements carrying a data-tip attribute
+ * are picked up by the shared tooltip in app.js.
+ * ========================================================================== */
+(function (global) {
+  'use strict';
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function fmtNum(n, digits) {
+    return Number(n).toLocaleString(undefined, {
+      minimumFractionDigits: digits || 0, maximumFractionDigits: digits || 0
+    });
+  }
+
+  function niceCeil(v) {
+    if (v <= 0) return 1;
+    var mag = Math.pow(10, Math.floor(Math.log10(v)));
+    var norm = v / mag;
+    var step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+    return step * mag;
+  }
+
+  /* ---------------------------------------------------------------------
+   * Vertical bar chart with a highlighted peak
+   * ------------------------------------------------------------------ */
+
+  function barChart(opts) {
+    var labels = opts.labels || [];
+    var values = opts.values || [];
+    var n = values.length;
+    if (!n) return emptyState('Nothing to show for this range.');
+
+    var W = 900, H = opts.height || 300;
+    var padL = 46, padR = 12, padT = 22, padB = opts.labelAngle ? 62 : 34;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+
+    var max = Math.max.apply(null, values);
+    var top = niceCeil(max * 1.12) || 1;
+    var peak = values.indexOf(max);
+
+    var slot = plotW / n;
+    var barW = Math.max(2, Math.min(slot * 0.72, 56));
+    var digits = opts.decimals == null ? 0 : opts.decimals;
+
+    var parts = [];
+
+    // horizontal guides
+    for (var g = 0; g <= 4; g++) {
+      var gv = top * g / 4;
+      var gy = padT + plotH - (gv / top) * plotH;
+      parts.push('<line class="grid" x1="' + padL + '" y1="' + gy.toFixed(1) +
+        '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '"/>');
+      parts.push('<text class="axis" x="' + (padL - 8) + '" y="' + (gy + 4).toFixed(1) +
+        '" text-anchor="end">' + esc(fmtNum(gv, gv < 10 && digits ? digits : 0)) + '</text>');
+    }
+
+    for (var i = 0; i < n; i++) {
+      var v = values[i];
+      var h = top > 0 ? (v / top) * plotH : 0;
+      var x = padL + slot * i + (slot - barW) / 2;
+      var y = padT + plotH - h;
+      var isPeak = i === peak && max > 0;
+      var tip = (opts.tips && opts.tips[i]) || (labels[i] + ' — ' + fmtNum(v, digits) + ' ' + (opts.unit || ''));
+
+      // Mutually exclusive classes: two rules painting the same SVG element
+      // from custom properties can go stale when the colour scheme flips.
+      parts.push('<rect class="' + (isPeak ? 'bar-peak' : 'bar') + '" x=' +
+        '"' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + barW.toFixed(1) +
+        '" height="' + Math.max(0, h).toFixed(1) + '" rx="3" data-tip="' + esc(tip) + '"/>');
+
+      if (opts.showValues !== false && n <= 26 && v > 0) {
+        parts.push('<text class="bar-value" x="' + (x + barW / 2).toFixed(1) +
+          '" y="' + (y - 6).toFixed(1) + '" text-anchor="middle">' +
+          esc(fmtNum(v, digits)) + '</text>');
+      }
+
+      var lx = padL + slot * i + slot / 2;
+      var ly = padT + plotH + 18;
+      if (opts.labelAngle) {
+        parts.push('<text class="axis" x="' + lx.toFixed(1) + '" y="' + ly +
+          '" text-anchor="end" transform="rotate(-45 ' + lx.toFixed(1) + ' ' + ly + ')">' +
+          esc(labels[i]) + '</text>');
+      } else if (n <= 32 || i % Math.ceil(n / 24) === 0) {
+        parts.push('<text class="axis" x="' + lx.toFixed(1) + '" y="' + ly +
+          '" text-anchor="middle">' + esc(labels[i]) + '</text>');
+      }
+    }
+
+    return svgWrap(W, H, parts.join(''));
+  }
+
+  /* ---------------------------------------------------------------------
+   * Area / line chart
+   * ------------------------------------------------------------------ */
+
+  function areaChart(opts) {
+    var labels = opts.labels || [];
+    var values = opts.values || [];
+    var n = values.length;
+    if (!n) return emptyState('No plays in this range.');
+    if (n === 1) {
+      return barChart({ labels: labels, values: values, height: opts.height || 220, unit: opts.unit });
+    }
+
+    var W = 900, H = opts.height || 240;
+    var padL = 44, padR = 14, padT = 18, padB = 34;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+    var max = Math.max.apply(null, values);
+    var top = niceCeil(max * 1.15) || 1;
+
+    var pts = values.map(function (v, i) {
+      return {
+        x: padL + (plotW * i) / (n - 1),
+        y: padT + plotH - (top ? (v / top) * plotH : 0),
+        v: v, label: labels[i]
+      };
+    });
+
+    var line = pts.map(function (p, i) {
+      return (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1);
+    }).join(' ');
+    var area = line + ' L' + pts[n - 1].x.toFixed(1) + ' ' + (padT + plotH) +
+      ' L' + pts[0].x.toFixed(1) + ' ' + (padT + plotH) + ' Z';
+
+    var parts = [];
+    for (var g = 0; g <= 3; g++) {
+      var gv = top * g / 3;
+      var gy = padT + plotH - (gv / top) * plotH;
+      parts.push('<line class="grid" x1="' + padL + '" y1="' + gy.toFixed(1) +
+        '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '"/>');
+      parts.push('<text class="axis" x="' + (padL - 8) + '" y="' + (gy + 4).toFixed(1) +
+        '" text-anchor="end">' + esc(fmtNum(gv)) + '</text>');
+    }
+
+    parts.push('<path class="area-fill" d="' + area + '"/>');
+    parts.push('<path class="area-line" d="' + line + '"/>');
+
+    var everyLabel = Math.ceil(n / 12);
+    pts.forEach(function (p, i) {
+      parts.push('<circle class="area-dot" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) +
+        '" r="' + (n > 40 ? 2 : 3.5) + '" data-tip="' +
+        esc(p.label + ' — ' + fmtNum(p.v) + ' ' + (opts.unit || 'plays')) + '"/>');
+      if (i % everyLabel === 0 || i === n - 1) {
+        parts.push('<text class="axis" x="' + p.x.toFixed(1) + '" y="' + (padT + plotH + 18) +
+          '" text-anchor="middle">' + esc(p.label) + '</text>');
+      }
+    });
+
+    return svgWrap(W, H, parts.join(''));
+  }
+
+  /* ---------------------------------------------------------------------
+   * Calendar heatmap — one column per week, one cell per day
+   * ------------------------------------------------------------------ */
+
+  var DAY_MS = 86400000;
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  function calendarHeatmap(opts) {
+    var year = opts.year;
+    var counts = opts.counts;          // Map<dayNum, plays>
+    var CELL = 13, GAP = 3, TOPPAD = 20, LEFTPAD = 30;
+
+    var start = new Date(year, 0, 1);
+    var end = new Date(year, 11, 31);
+    var startDay = Math.floor((start.getTime() - start.getTimezoneOffset() * 60000) / DAY_MS);
+    var endDay = Math.floor((end.getTime() - end.getTimezoneOffset() * 60000) / DAY_MS);
+
+    var max = 0;
+    counts.forEach(function (v) { if (v > max) max = v; });
+
+    var parts = [];
+    var weekdayLabels = ['Mon', 'Wed', 'Fri'];
+    var weekdayRows = [0, 2, 4];       // Monday-first rows
+
+    var col = 0;
+    var firstDow = (start.getDay() + 6) % 7;   // Monday = 0
+    var lastMonthLabelled = -1;
+    var totalWeeks = Math.ceil((endDay - startDay + 1 + firstDow) / 7);
+
+    for (var d = startDay; d <= endDay; d++) {
+      var offset = d - startDay + firstDow;
+      col = Math.floor(offset / 7);
+      var row = offset % 7;
+      var x = LEFTPAD + col * (CELL + GAP);
+      var y = TOPPAD + row * (CELL + GAP);
+      var v = counts.get(d) || 0;
+      var level = v === 0 ? 0 : Math.min(4, Math.ceil((v / max) * 4));
+      var date = new Date(d * DAY_MS);
+
+      parts.push('<rect class="hm-cell" data-level="' + level + '" x="' + x + '" y="' + y +
+        '" width="' + CELL + '" height="' + CELL + '" rx="3" data-tip="' +
+        esc(date.getUTCDate() + ' ' + MONTHS[date.getUTCMonth()] + ' ' + year + ' — ' +
+            (v === 0 ? 'no plays' : fmtNum(v) + (v === 1 ? ' play' : ' plays'))) + '"/>');
+
+      if (date.getUTCMonth() !== lastMonthLabelled && date.getUTCDate() <= 7) {
+        lastMonthLabelled = date.getUTCMonth();
+        parts.push('<text class="axis" x="' + x + '" y="' + (TOPPAD - 7) + '">' +
+          MONTHS[lastMonthLabelled] + '</text>');
+      }
+    }
+
+    weekdayRows.forEach(function (row, i) {
+      parts.push('<text class="axis" x="0" y="' +
+        (TOPPAD + row * (CELL + GAP) + CELL - 2) + '">' + weekdayLabels[i] + '</text>');
+    });
+
+    var W = LEFTPAD + totalWeeks * (CELL + GAP);
+    var H = TOPPAD + 7 * (CELL + GAP);
+    return '<svg class="chart heatmap" width="' + W + '" height="' + H +
+      '" viewBox="0 0 ' + W + ' ' + H + '" role="img">' + parts.join('') + '</svg>';
+  }
+
+  /* ---------------------------------------------------------------------
+   * Donut
+   * ------------------------------------------------------------------ */
+
+  function donut(opts) {
+    var items = opts.items || [];
+    var total = items.reduce(function (s, i) { return s + i.count; }, 0);
+    if (!total) return emptyState('No plays in this range.');
+
+    var size = opts.size || 168, r = size / 2 - 14, cx = size / 2, cy = size / 2, sw = 22;
+    var angle = -90;
+    var parts = [];
+
+    items.slice(0, 6).forEach(function (item, i) {
+      var sweep = (item.count / total) * 360;
+      if (sweep <= 0) return;
+      parts.push(arc(cx, cy, r, angle, angle + Math.min(sweep, 359.99), sw, i,
+        item.name + ' — ' + Math.round(item.share * 100) + '% (' + fmtNum(item.count) + ' plays)'));
+      angle += sweep;
+    });
+
+    parts.push('<text class="donut-total" x="' + cx + '" y="' + (cy - 2) +
+      '" text-anchor="middle">' + esc(items[0] ? Math.round(items[0].share * 100) + '%' : '') + '</text>');
+    parts.push('<text class="donut-caption" x="' + cx + '" y="' + (cy + 16) +
+      '" text-anchor="middle">' + esc(items[0] ? items[0].name : '') + '</text>');
+
+    return '<svg class="chart donut" width="' + size + '" height="' + size +
+      '" viewBox="0 0 ' + size + ' ' + size + '" role="img">' + parts.join('') + '</svg>';
+  }
+
+  function arc(cx, cy, r, a0, a1, sw, colorIndex, tip) {
+    var rad = function (deg) { return deg * Math.PI / 180; };
+    var x0 = cx + r * Math.cos(rad(a0)), y0 = cy + r * Math.sin(rad(a0));
+    var x1 = cx + r * Math.cos(rad(a1)), y1 = cy + r * Math.sin(rad(a1));
+    var large = (a1 - a0) > 180 ? 1 : 0;
+    return '<path class="slice" data-c="' + colorIndex + '" d="M ' + x0.toFixed(2) + ' ' + y0.toFixed(2) +
+      ' A ' + r + ' ' + r + ' 0 ' + large + ' 1 ' + x1.toFixed(2) + ' ' + y1.toFixed(2) +
+      '" stroke-width="' + sw + '" fill="none" data-tip="' + esc(tip) + '"/>';
+  }
+
+  /* ---------------------------------------------------------------------
+   * Shared plumbing
+   * ------------------------------------------------------------------ */
+
+  function svgWrap(W, H, inner) {
+    // Scales with the container while keeping text undistorted.
+    return '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img">' + inner + '</svg>';
+  }
+
+  function emptyState(message) {
+    return '<p class="empty">' + esc(message) + '</p>';
+  }
+
+  global.SpotifyCharts = {
+    barChart: barChart,
+    areaChart: areaChart,
+    calendarHeatmap: calendarHeatmap,
+    donut: donut,
+    esc: esc,
+    fmtNum: fmtNum
+  };
+})(typeof self !== 'undefined' ? self : this);

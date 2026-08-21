@@ -1,0 +1,17 @@
+# Personal listening data — never commit this. The export contains your play
+# history and your IP addresses.
+Streaming_History_*.json
+Streaming_History_Audio_*.json
+*.zip
+
+# Spotify API credentials and token caches
+.cache
+.cache-*
+.env
+scratch/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
