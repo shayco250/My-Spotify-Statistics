@@ -16,6 +16,35 @@
   var DAY_MS = 86400000;
 
   /* ---------------------------------------------------------------------
+   * Grouping switch
+   *
+   * processing.js hands over two ways of counting the same rows: "strict",
+   * where a remix is its own track, and "folded", where every version counts
+   * as the original song. Switching rewrites one array of ints and swaps the
+   * metadata tables — no reparsing, so the toggle is instant.
+   * ------------------------------------------------------------------ */
+
+  function applyGrouping(D, folded) {
+    var meta = folded ? D.folded : D.strict;
+    var ids = new Int32Array(D.rowCount);
+
+    if (folded) {
+      for (var i = 0; i < D.rowCount; i++) ids[i] = D.foldMap[D.strictTrackId[i]];
+    } else {
+      ids.set(D.strictTrackId);
+    }
+
+    D.grouping = folded ? 'folded' : 'strict';
+    D.trackId = ids;
+    D.trackName = meta.trackName;
+    D.trackCredit = meta.trackCredit;
+    D.trackArtistId = meta.trackArtistId;
+    D.trackAlbumId = meta.trackAlbumId;
+    D.trackCount = meta.trackName.length;
+    return D;
+  }
+
+  /* ---------------------------------------------------------------------
    * Day-number helpers. dayNum is "days since 1970-01-01" in local time.
    * ------------------------------------------------------------------ */
 
@@ -74,38 +103,56 @@
     return limit ? out.slice(0, limit) : out;
   }
 
+  /** Every credited artist, as one line: "Martin Garrix, DubVision, Jaimes". */
+  function creditOfTrack(D, trackId) {
+    return D.trackCredit[trackId] || D.artistNames[D.trackArtistId[trackId]];
+  }
+
   function artistNameOfTrack(D, trackId) { return D.artistNames[D.trackArtistId[trackId]]; }
 
-  /** Longest and current run of consecutive listening days. */
-  function streaksFromDays(days) {
-    if (!days.length) {
-      return { longest: 0, longestStart: null, longestEnd: null, current: 0 };
-    }
-    var longest = 1, longestStart = days[0], longestEnd = days[0];
-    var runLen = 1, runStart = days[0];
-
+  /** Split a sorted day list into runs of consecutive days. */
+  function runsFromDays(days) {
+    var runs = [];
+    if (!days.length) return runs;
+    var start = days[0], len = 1;
     for (var i = 1; i < days.length; i++) {
-      if (days[i] === days[i - 1] + 1) {
-        runLen++;
-      } else if (days[i] !== days[i - 1]) {
-        if (runLen > longest) { longest = runLen; longestStart = runStart; longestEnd = days[i - 1]; }
-        runLen = 1; runStart = days[i];
-      }
+      if (days[i] === days[i - 1]) continue;
+      if (days[i] === days[i - 1] + 1) { len++; continue; }
+      runs.push({ start: start, end: days[i - 1], length: len });
+      start = days[i]; len = 1;
     }
-    if (runLen > longest) { longest = runLen; longestStart = runStart; longestEnd = days[days.length - 1]; }
+    runs.push({ start: start, end: days[days.length - 1], length: len });
+    return runs;
+  }
+
+  /** Longest, current and previous run of consecutive listening days. */
+  function streaksFromDays(days) {
+    var runs = runsFromDays(days);
+    if (!runs.length) {
+      return { longest: 0, longestStart: null, longestEnd: null, current: 0, previous: null };
+    }
+
+    var best = runs[0];
+    for (var i = 1; i < runs.length; i++) if (runs[i].length > best.length) best = runs[i];
 
     // The current streak only counts if it reaches today or yesterday.
     var today = dateToDayNum(new Date());
-    var last = days[days.length - 1];
-    var current = 0;
-    if (last >= today - 1) {
-      current = 1;
-      for (var j = days.length - 1; j > 0; j--) {
-        if (days[j] === days[j - 1] + 1) current++;
-        else if (days[j] !== days[j - 1]) break;
-      }
-    }
-    return { longest: longest, longestStart: longestStart, longestEnd: longestEnd, current: current };
+    var lastRun = runs[runs.length - 1];
+    var isLive = lastRun.end >= today - 1;
+
+    // "Previous" is the run before the live one, or the most recent finished
+    // run when nothing is running right now.
+    var prevRun = isLive
+      ? (runs.length > 1 ? runs[runs.length - 2] : null)
+      : lastRun;
+
+    return {
+      longest: best.length,
+      longestStart: best.start,
+      longestEnd: best.end,
+      current: isLive ? lastRun.length : 0,
+      previous: prevRun ? { length: prevRun.length, start: prevRun.start, end: prevRun.end } : null
+    };
   }
 
   /** Unique listening days inside a range, ascending. Rows are time-ordered,
@@ -151,7 +198,7 @@
       uniqueArtists: artistSeen.size,
       topTrack: topId == null ? null : {
         id: topId, name: D.trackName[topId],
-        artist: artistNameOfTrack(D, topId), plays: topPlays
+        artist: creditOfTrack(D, topId), plays: topPlays
       }
     };
   }
@@ -170,7 +217,7 @@
     return sortedEntriesDesc(plays, limit).map(function (e, idx) {
       return {
         rank: idx + 1, id: e[0], name: D.trackName[e[0]],
-        artist: artistNameOfTrack(D, e[0]),
+        artist: creditOfTrack(D, e[0]),
         plays: e[1], hours: (secs.get(e[0]) || 0) / 3600
       };
     });
@@ -196,21 +243,19 @@
     });
   }
 
-  function topAlbums(D, r, limit) {
-    var plays = new Map(), secs = new Map(), artistOf = new Map();
+  /** Every distinct track by one artist, most played first. */
+  function artistTrackList(D, r, artistId) {
+    var plays = new Map(), secs = new Map();
     for (var i = r.lo; i < r.hi; i++) {
       var t = D.trackId[i];
-      var b = D.trackAlbumId[t];
-      if (b < 0) continue;
-      secs.set(b, (secs.get(b) || 0) + D.sec[i]);
-      if (D.sec[i] < MIN_STREAM_SEC) continue;
-      plays.set(b, (plays.get(b) || 0) + 1);
-      if (!artistOf.has(b)) artistOf.set(b, artistNameOfTrack(D, t));
+      if (D.trackArtistId[t] !== artistId) continue;
+      secs.set(t, (secs.get(t) || 0) + D.sec[i]);
+      if (D.sec[i] >= MIN_STREAM_SEC) plays.set(t, (plays.get(t) || 0) + 1);
     }
-    return sortedEntriesDesc(plays, limit).map(function (e, idx) {
+    return sortedEntriesDesc(plays).map(function (e, idx) {
       return {
-        rank: idx + 1, id: e[0], name: D.albumNames[e[0]],
-        artist: artistOf.get(e[0]) || '',
+        rank: idx + 1, id: e[0], name: D.trackName[e[0]],
+        artist: creditOfTrack(D, e[0]),
         plays: e[1], hours: (secs.get(e[0]) || 0) / 3600
       };
     });
@@ -219,6 +264,22 @@
   /* ---------------------------------------------------------------------
    * Listening habits — the fields the old dashboard never touched
    * ------------------------------------------------------------------ */
+
+  /** Turn raw platform strings into a short, readable list of what they were. */
+  function describeRawPlatforms(rawCounts) {
+    if (!rawCounts) return '';
+    var pretty = new Map();
+
+    for (var raw in rawCounts) {
+      // Spotify writes things like "Partner sonos_ZP120" or "windows (10.0.19042)".
+      var label = String(raw).split(/[\s(,;]/)[0].replace(/[_-]+/g, ' ').trim();
+      if (!label) label = raw;
+      label = label.charAt(0).toUpperCase() + label.slice(1);
+      pretty.set(label, (pretty.get(label) || 0) + rawCounts[raw]);
+    }
+
+    return sortedEntriesDesc(pretty, 3).map(function (e) { return e[0]; }).join(', ');
+  }
 
   function habits(D, r) {
     var total = 0, skipped = 0, shuffled = 0, offline = 0;
@@ -252,7 +313,7 @@
       if (e.total < 8) return;
       var rate = e.skipped / e.total;
       if (!worst || rate > worst.rate) {
-        worst = { rate: rate, id: t, name: D.trackName[t], artist: artistNameOfTrack(D, t), plays: e.total };
+        worst = { rate: rate, id: t, name: D.trackName[t], artist: creditOfTrack(D, t), plays: e.total };
       }
     });
 
@@ -262,7 +323,13 @@
       shuffleRate: total ? shuffled / total : 0,
       offlineRate: total ? offline / total : 0,
       platforms: sortedEntriesDesc(platforms).map(function (e) {
-        return { name: D.platformNames[e[0]], count: e[1], share: e[1] / total };
+        var label = D.platformNames[e[0]];
+        return {
+          name: label, count: e[1], share: e[1] / total,
+          // "Other" and "Unknown" mean nothing on their own, so carry the raw
+          // strings behind them for the caller to spell out.
+          detail: describeRawPlatforms(D.platformRaw && D.platformRaw[label])
+        };
       }),
       reasons: sortedEntriesDesc(reasons, 5).map(function (e) {
         return { name: D.reasonNames[e[0]], count: e[1], share: e[1] / total };
@@ -348,47 +415,66 @@
    * Sessions — runs of listening separated by a gap of silence
    * ------------------------------------------------------------------ */
 
-  function sessionsPerMonth(D, r, gapHours, year) {
-    var gapMs = gapHours * 3600000;
-    var byMonth = new Map();
-    var prevTs = -Infinity;
+  /* A session is an unbroken listening stretch. Anything longer than this
+     much silence starts a new one — a short pause between tracks, a phone
+     call, a walk to the car, all stay inside the same session. */
+  var SILENCE_BREAK_MS = 30 * 60000;
+
+  /** All listening stretches in a range, in order. */
+  function listeningRuns(D, r) {
+    var runs = [];
+    var cur = null;
 
     for (var i = r.lo; i < r.hi; i++) {
       if (D.sec[i] < MIN_STREAM_SEC) continue;
-      var isNew = (D.ts[i] - prevTs) >= gapMs;
-      prevTs = D.ts[i];
-      if (!isNew) continue;
-      if (year != null && D.year[i] !== year) continue;
-      var key = D.year[i] * 12 + D.month[i];
-      byMonth.set(key, (byMonth.get(key) || 0) + 1);
+      var start = D.ts[i];
+      var end = D.ts[i] + D.sec[i] * 1000;
+
+      if (cur && (start - cur.end) <= SILENCE_BREAK_MS) {
+        cur.end = Math.max(cur.end, end);
+        cur.plays++;
+        cur.playedSec += D.sec[i];
+      } else {
+        if (cur) runs.push(cur);
+        cur = { start: start, end: end, plays: 1, playedSec: D.sec[i],
+                year: D.year[i], month: D.month[i] };
+      }
     }
+    if (cur) runs.push(cur);
+
+    runs.forEach(function (run) { run.hours = (run.end - run.start) / 3600000; });
+    return runs;
+  }
+
+  /** Sessions that ran for at least minHours without a break. */
+  function sessionsPerMonth(D, r, minHours, year) {
+    var byMonth = new Map();
+    listeningRuns(D, r).forEach(function (run) {
+      if (run.hours < minHours) return;
+      if (year != null && run.year !== year) return;
+      var key = run.year * 12 + run.month;
+      byMonth.set(key, (byMonth.get(key) || 0) + 1);
+    });
     return fillMonths(byMonth);
   }
 
-  function sessionSummary(D, r, gapHours) {
-    var gapMs = gapHours * 3600000;
-    var sessions = 0, curSec = 0, longest = 0, longestStart = 0, totalSec = 0;
-    var prevTs = -Infinity, curStart = 0;
+  function sessionSummary(D, r, minHours) {
+    var runs = listeningRuns(D, r);
+    var qualifying = runs.filter(function (run) { return run.hours >= minHours; });
 
-    for (var i = r.lo; i < r.hi; i++) {
-      if (D.sec[i] < MIN_STREAM_SEC) continue;
-      if ((D.ts[i] - prevTs) >= gapMs) {
-        if (curSec > longest) { longest = curSec; longestStart = curStart; }
-        sessions++;
-        curSec = 0;
-        curStart = D.ts[i];
-      }
-      prevTs = D.ts[i];
-      curSec += D.sec[i];
-      totalSec += D.sec[i];
-    }
-    if (curSec > longest) { longest = curSec; longestStart = curStart; }
+    var longest = null, totalHours = 0;
+    qualifying.forEach(function (run) {
+      totalHours += run.hours;
+      if (!longest || run.hours > longest.hours) longest = run;
+    });
 
     return {
-      sessions: sessions,
-      avgMinutes: sessions ? (totalSec / sessions) / 60 : 0,
-      longestMinutes: longest / 60,
-      longestStart: longest ? new Date(longestStart) : null
+      allRuns: runs.length,
+      sessions: qualifying.length,
+      avgHours: qualifying.length ? totalHours / qualifying.length : 0,
+      longestHours: longest ? longest.hours : 0,
+      longestStart: longest ? new Date(longest.start) : null,
+      breakMinutes: SILENCE_BREAK_MS / 60000
     };
   }
 
@@ -424,9 +510,12 @@
       var volume = Math.log10(e.plays + 1);
       var recency = Math.exp(-0.015 * sinceLast);
       rows.push({
-        id: t, name: D.trackName[t], artist: artistNameOfTrack(D, t),
+        id: t, name: D.trackName[t], artist: creditOfTrack(D, t),
         plays: e.plays, days: e.days,
-        daysSinceLast: Math.floor(sinceLast),
+        daysSinceFirst: Math.round(sinceFirst),
+        daysSinceLast: Math.round(sinceLast),
+        // Kept so the explanation can show the arithmetic rather than assert it.
+        density: density, volume: volume, recency: recency,
         raw: 0.4 * density + 0.35 * volume + 0.25 * recency
       });
     });
@@ -435,6 +524,8 @@
     rows.forEach(function (x) { if (x.raw < min) min = x.raw; if (x.raw > max) max = x.raw; });
     var span = max - min;
     rows.forEach(function (x) {
+      x.rawMin = min;
+      x.rawMax = max;
       x.score = span > 0 ? Math.round((1 + 99 * (x.raw - min) / span) * 100) / 100 : 50;
     });
 
@@ -513,7 +604,7 @@
     return {
       id: trackId,
       name: D.trackName[trackId],
-      artist: artistNameOfTrack(D, trackId),
+      artist: creditOfTrack(D, trackId),
       album: D.trackAlbumId[trackId] >= 0 ? D.albumNames[D.trackAlbumId[trackId]] : null,
       plays: plays,
       hours: secs / 3600,
@@ -576,7 +667,20 @@
   function funFacts(D, r) {
     var hoursPerDay = new Map(), hoursPerMonth = new Map();
     var artistSecs = new Map(), artistTracks = new Map();
-    var firstRow = null;
+    var artistPlays = new Map();
+    var streams = 0, lateNight = 0;
+
+    // A track counts as a discovery when its first ever play falls inside the
+    // selected range — so narrowing the dates answers "what was new to me then".
+    var firstSeen = new Int32Array(D.trackCount).fill(-1);
+    for (var j = 0; j < D.rowCount; j++) {
+      if (D.sec[j] < MIN_STREAM_SEC) continue;
+      var tid = D.trackId[j];
+      if (firstSeen[tid] === -1) firstSeen[tid] = j;
+    }
+
+    var discoveries = 0;
+    var counted = new Set();
 
     for (var i = r.lo; i < r.hi; i++) {
       hoursPerDay.set(D.dayNum[i], (hoursPerDay.get(D.dayNum[i]) || 0) + D.sec[i]);
@@ -588,7 +692,15 @@
       artistSecs.set(a, (artistSecs.get(a) || 0) + D.sec[i]);
 
       if (D.sec[i] < MIN_STREAM_SEC) continue;
-      if (firstRow === null) firstRow = i;
+      streams++;
+      if (D.hour[i] < 5) lateNight++;
+      artistPlays.set(a, (artistPlays.get(a) || 0) + 1);
+
+      if (!counted.has(t)) {
+        counted.add(t);
+        if (firstSeen[t] >= r.lo && firstSeen[t] < r.hi) discoveries++;
+      }
+
       var set = artistTracks.get(a);
       if (!set) { set = new Set(); artistTracks.set(a, set); }
       set.add(t);
@@ -611,17 +723,26 @@
       }
     });
 
+    // How much of your listening sits with a handful of artists.
+    var topTen = sortedEntriesDesc(artistPlays, 10);
+    var topTenPlays = topTen.reduce(function (s, e) { return s + e[1]; }, 0);
+
+    var longestRun = null;
+    listeningRuns(D, r).forEach(function (run) {
+      if (!longestRun || run.hours > longestRun.hours) longestRun = run;
+    });
+
     return {
       streak: streaksFromDays(uniqueDays(D, r, null, null)),
       busiestDay: busiestDay && { day: busiestDay.key, hours: busiestDay.value / 3600 },
       bestMonth: bestMonth && { label: monthLabel(bestMonth.key), hours: bestMonth.value / 3600 },
       topArtist: topArtist && { name: D.artistNames[topArtist.key], hours: topArtist.value / 3600 },
-      firstTrack: firstRow === null ? null : {
-        name: D.trackName[D.trackId[firstRow]],
-        artist: artistNameOfTrack(D, D.trackId[firstRow]),
-        date: new Date(D.ts[firstRow])
-      },
-      mostDiverse: diverse
+      mostDiverse: diverse,
+      discoveries: discoveries,
+      concentration: streams ? topTenPlays / streams : 0,
+      topTenCount: topTen.length,
+      lateNightShare: streams ? lateNight / streams : 0,
+      longestSitting: longestRun && { hours: longestRun.hours, plays: longestRun.plays, start: new Date(longestRun.start) }
     };
   }
 
@@ -651,7 +772,7 @@
       day: target,
       plays: plays,
       hours: secs / 3600,
-      topTrack: best ? { name: D.trackName[best[0]], artist: artistNameOfTrack(D, best[0]), plays: best[1] } : null,
+      topTrack: best ? { name: D.trackName[best[0]], artist: creditOfTrack(D, best[0]), plays: best[1] } : null,
       obsession: obs
     };
   }
@@ -671,8 +792,8 @@
     }
     var tracks = sortedEntriesDesc(trackPlays).map(function (e) {
       return {
-        id: e[0], plays: e[1], name: D.trackName[e[0]], artist: artistNameOfTrack(D, e[0]),
-        search: (D.trackName[e[0]] + ' ' + artistNameOfTrack(D, e[0])).toLowerCase()
+        id: e[0], plays: e[1], name: D.trackName[e[0]], artist: creditOfTrack(D, e[0]),
+        search: (D.trackName[e[0]] + ' ' + creditOfTrack(D, e[0])).toLowerCase()
       };
     });
     var artists = sortedEntriesDesc(artistPlays).map(function (e) {
@@ -683,20 +804,24 @@
 
   global.SpotifyAnalytics = {
     MIN_STREAM_SEC: MIN_STREAM_SEC,
+    applyGrouping: applyGrouping,
     range: range, fullRange: fullRange, bounds: bounds,
     dayNumToDate: dayNumToDate, dateToDayNum: dateToDayNum,
     isoToDayNum: isoToDayNum, dayNumToIso: dayNumToIso,
     monthLabel: monthLabel,
     glance: glance,
-    topTracks: topTracks, topArtists: topArtists, topAlbums: topAlbums,
+    topTracks: topTracks, topArtists: topArtists,
+    artistTrackList: artistTrackList,
     habits: habits,
     yearsIn: yearsIn, calendar: calendar, monthlyHours: monthlyHours,
     byHour: byHour, byDayOfWeek: byDayOfWeek,
+    listeningRuns: listeningRuns,
     sessionsPerMonth: sessionsPerMonth, sessionSummary: sessionSummary,
     obsession: obsession, playlist: playlist,
     trackDetail: trackDetail, artistDetail: artistDetail,
     funFacts: funFacts, timeTravel: timeTravel,
     buildSearchIndex: buildSearchIndex,
-    streaksFromDays: streaksFromDays
+    streaksFromDays: streaksFromDays,
+    creditOfTrack: creditOfTrack
   };
 })(typeof self !== 'undefined' ? self : this);

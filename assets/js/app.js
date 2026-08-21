@@ -9,14 +9,17 @@
   var esc = C.esc;
 
   /* ---------------------------------------------------------------------
-   * Deezer proxy.
+   * Deezer proxy — always used when set.
    *
-   * Leave empty and the report skips the online lookup entirely — the
-   * built-in title + artist matcher still merges versions on its own.
-   * Set it to your Cloudflare Worker URL to enable "Deep matching".
+   * It resolves a recording code (ISRC) and the full credit list for tracks
+   * that look like duplicates, which is what merges a song released by two
+   * labels under two different primary artists.
+   *
+   * A bare host is fine; the scheme is added for you. Leave it empty to skip
+   * the lookup entirely — the built-in title + artist matcher still runs.
    * See cloudflare-worker/README.md.
    * ------------------------------------------------------------------ */
-  var DEEZER_PROXY = '';
+  var DEEZER_PROXY = 'https://deezer-isrc.shayco250.workers.dev';
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -130,11 +133,6 @@
     showStage('loading');
     setProgress({ phase: 'read', current: 1, total: state.files.length, label: state.files[0].name });
 
-    var useDeezer = $('deep-match').checked && DEEZER_PROXY;
-    if ($('deep-match').checked && !DEEZER_PROXY) {
-      console.warn('Deep matching is switched on but DEEZER_PROXY is empty in app.js — skipping it.');
-    }
-
     var worker = null;
     try {
       worker = new Worker('assets/js/worker.js');
@@ -151,17 +149,17 @@
       };
       worker.onerror = function () {
         worker.terminate();
-        runOnMainThread(useDeezer);
+        runOnMainThread();
       };
-      worker.postMessage({ type: 'process', files: state.files, deezerProxy: useDeezer ? DEEZER_PROXY : null });
+      worker.postMessage({ type: 'process', files: state.files, deezerProxy: DEEZER_PROXY || null });
     } else {
-      runOnMainThread(useDeezer);
+      runOnMainThread();
     }
   }
 
-  function runOnMainThread(useDeezer) {
+  function runOnMainThread() {
     window.SpotifyProcessing.processFiles(state.files, {
-      deezerProxy: useDeezer ? DEEZER_PROXY : null,
+      deezerProxy: DEEZER_PROXY || null,
       onProgress: setProgress
     }).then(onDataset).catch(function (err) {
       onImportError(err && err.message ? err.message : String(err));
@@ -179,7 +177,8 @@
 
   function onDataset(dataset) {
     // Typed arrays arrive transferred; rebuild the views on this side.
-    state.data = dataset;
+    // Strict grouping first: a remix stands on its own until asked otherwise.
+    state.data = A.applyGrouping(dataset, $('fold-versions').checked);
 
     var b = A.bounds(dataset);
     state.minDay = b.minDay;
@@ -292,14 +291,21 @@
       showStage('upload');
     });
 
-    $('track-count').addEventListener('change', renderTopTracks);
-    $('artist-count').addEventListener('change', renderTopArtists);
-    $('obsession-count').addEventListener('change', renderObsession);
+    $('fold-versions').addEventListener('change', function () {
+      A.applyGrouping(state.data, this.checked);
+      refresh();
+    });
+
+    bindCountInput('track-count', renderTopTracks);
+    bindCountInput('artist-count', renderTopArtists);
+    bindCountInput('obsession-count', renderObsession);
+
     $('calendar-year').addEventListener('change', renderCalendar);
     $('timeline-year').addEventListener('change', renderTimeline);
     $('session-year').addEventListener('change', renderSessions);
-    $('session-gap').addEventListener('change', renderSessions);
-    $('make-playlist').addEventListener('click', renderPlaylist);
+    $('session-length').addEventListener('change', renderSessions);
+    $('make-playlist').addEventListener('click', function () { renderPlaylist(true); });
+    $('playlist-sort').addEventListener('change', function () { renderPlaylist(false); });
     $('copy-playlist').addEventListener('click', copyPlaylist);
 
     setupSearch('track');
@@ -327,6 +333,37 @@
     };
     if (mq.addEventListener) mq.addEventListener('change', onChange);
     else if (mq.addListener) mq.addListener(onChange);
+  }
+
+  /** A "show top N" box: type any number, clamped to what the input allows. */
+  function bindCountInput(id, render) {
+    var input = $(id);
+    var timer = null;
+
+    function commit() {
+      var min = +input.min || 1, max = +input.max || 110;
+      var v = Math.round(+input.value);
+      if (!isFinite(v)) v = min;
+      v = Math.min(max, Math.max(min, v));
+      if (String(v) !== input.value) input.value = v;
+      render();
+    }
+
+    // Redraw as they type, but not on every keystroke of a two-digit number.
+    input.addEventListener('input', function () {
+      clearTimeout(timer);
+      timer = setTimeout(commit, 350);
+    });
+    input.addEventListener('change', function () { clearTimeout(timer); commit(); });
+    input.addEventListener('blur', function () { clearTimeout(timer); commit(); });
+  }
+
+  function countOf(id) {
+    var input = $(id);
+    var min = +input.min || 1, max = +input.max || 110;
+    var v = Math.round(+input.value);
+    if (!isFinite(v)) return min;
+    return Math.min(max, Math.max(min, v));
   }
 
   function clampDay(d) { return Math.min(state.maxDay, Math.max(state.minDay, d)); }
@@ -367,7 +404,6 @@
     renderGlance();
     renderTopTracks();
     renderTopArtists();
-    renderTopAlbums();
     renderHabits();
     renderCalendar();
     renderTimeline();
@@ -380,6 +416,7 @@
 
     $('playlist').innerHTML = '';
     $('copy-playlist').hidden = true;
+    $('playlist-sort-wrap').hidden = true;
     state.playlist = null;
 
     resetSearchInputs();
@@ -419,10 +456,22 @@
       'at least 30 seconds.';
 
     var st = state.data.stats;
-    $('merge-note').textContent = st.merged > 0
-      ? C.fmtNum(st.rawUris) + ' Spotify track IDs were merged into ' + C.fmtNum(st.tracks) +
-        ' distinct songs, so remixes, re-releases and extended versions count once.'
-      : 'Every Spotify track ID in your export was already a distinct song.';
+    var tracks = state.data.grouping === 'folded' ? st.foldedTracks : st.strictTracks;
+    var note = C.fmtNum(st.rawUris) + ' Spotify track IDs resolved to ' +
+      C.fmtNum(tracks) + ' songs — ' +
+      (state.data.grouping === 'folded'
+        ? 'every remix, live take and extended mix counted as the original.'
+        : 're-releases and reordered credits merged, versions kept apart.');
+
+    // A blocked proxy used to look exactly like "nothing to merge". Say so.
+    var lk = st.lookup;
+    if (lk && lk.attempted && lk.failed) {
+      note += ' Release-code lookup could not reach the proxy for ' +
+        C.fmtNum(lk.failed) + ' of ' + C.fmtNum(lk.attempted) +
+        ' tracks, so some duplicates may still be listed separately.';
+    }
+    $('merge-note').textContent = note;
+    $('merge-note').classList.toggle('is-warning', !!(lk && lk.failed));
   }
 
   /* ------------------------------------------------------------ lists -- */
@@ -439,13 +488,14 @@
         ? '<span class="rank-bar"><i style="width:' + opts.barPct.toFixed(1) + '%"></i></span>' : '') +
       (opts.pill || '') +
       (opts.figure
-        ? '<span class="rank-figure">' + opts.figure +
+        ? '<span class="rank-figure"' +
+          (opts.figureTip ? ' data-tip="' + esc(opts.figureTip) + '"' : '') + '>' + opts.figure +
           (opts.figureSub ? '<small>' + opts.figureSub + '</small>' : '') + '</span>' : '') +
       '</div>';
   }
 
   function renderTopTracks() {
-    var n = +$('track-count').value;
+    var n = countOf('track-count');
     var rows = A.topTracks(state.data, state.range, n);
     var max = rows.length ? rows[0].plays : 1;
 
@@ -463,7 +513,7 @@
   }
 
   function renderTopArtists() {
-    var n = +$('artist-count').value;
+    var n = countOf('artist-count');
     var rows = A.topArtists(state.data, state.range, n);
     var max = rows.length ? rows[0].plays : 1;
 
@@ -480,21 +530,6 @@
       : '<p class="empty">No artists in this range.</p>';
 
     bindRankClicks('top-artists', function (id) { selectArtist(id); });
-  }
-
-  function renderTopAlbums() {
-    var rows = A.topAlbums(state.data, state.range, 10);
-    var max = rows.length ? rows[0].plays : 1;
-
-    $('top-albums').innerHTML = rows.length
-      ? '<div class="rank-list">' + rows.map(function (b) {
-          return rankRow({
-            rank: b.rank, name: b.name, sub: b.artist,
-            barPct: (b.plays / max) * 100,
-            figure: C.fmtNum(b.plays), figureSub: C.fmtNum(b.hours, 1) + ' h'
-          });
-        }).join('') + '</div>'
-      : '<p class="empty">No album information in this export.</p>';
   }
 
   function bindRankClicks(containerId, handler) {
@@ -518,16 +553,23 @@
         Math.round(h.mostSkipped.rate * 100) + '% of its plays)'
       : 'No track has enough plays to single out yet.';
 
+    // Bars are scaled against the biggest slice so the row reads as a
+    // comparison, not as a set of near-empty tracks.
+    var widest = h.reasons.length ? h.reasons[0].share : 1;
     $('habit-reasons').innerHTML = h.reasons.map(function (r) {
       return '<li><span class="rl-name">' + esc(r.name) + '</span>' +
-        '<span class="rl-bar"><i style="width:' + (r.share * 100).toFixed(1) + '%"></i></span>' +
+        '<span class="rl-bar"><i style="width:' + (r.share / widest * 100).toFixed(1) + '%"></i></span>' +
         '<span class="rl-pct">' + Math.round(r.share * 100) + '%</span></li>';
     }).join('');
 
     $('platform-donut').innerHTML = C.donut({ items: h.platforms });
     $('platform-legend').innerHTML = h.platforms.slice(0, 6).map(function (p, i) {
+      // "Other" and "Unknown" say nothing on their own — name what is inside.
+      var needsDetail = (p.name === 'Other' || p.name === 'Unknown') && p.detail;
       return '<li><span class="dot" data-c="' + i + '"></span>' +
-        '<span class="name">' + esc(p.name) + '</span>' +
+        '<span class="name">' + esc(p.name) +
+        (needsDetail ? ' <span class="legend-detail">(' + esc(p.detail) + ')</span>' : '') +
+        '</span>' +
         '<span class="pct">' + (p.share * 100 < 1 ? '<1' : Math.round(p.share * 100)) + '%</span></li>';
     }).join('');
   }
@@ -587,7 +629,7 @@
   /* -------------------------------------------------------- obsession -- */
 
   function renderObsession() {
-    var n = +$('obsession-count').value;
+    var n = countOf('obsession-count');
     var rows = A.obsession(state.data, state.range, referenceMs(), n);
 
     $('obsession-list').innerHTML = rows.length
@@ -596,28 +638,76 @@
           return rankRow({
             rank: i + 1, name: t.name, sub: t.artist, dataId: t.id, onClick: true,
             pill: '<span class="score-pill" data-tier="' + tier + '">' + t.score.toFixed(1) + '</span>',
-            figure: C.fmtNum(t.plays), figureSub: C.fmtNum(t.days) + ' days'
+            figure: C.fmtNum(t.plays), figureSub: C.fmtNum(t.days) + ' days',
+            figureTip: C.fmtNum(t.plays) + ' plays, spread over ' + C.fmtNum(t.days) +
+              ' separate days you listened to it'
           });
         }).join('') + '</div>'
       : '<p class="empty">Not enough plays in this range.</p>';
 
     bindRankClicks('obsession-list', function (id) { selectTrack(id); });
 
-    var sample = rows[2] || rows[0];
-    $('explain-example').innerHTML = sample
-      ? 'For example, <strong class="bidi">' + esc(sample.name) + '</strong> by <span class="bidi">' +
-        esc(sample.artist) + '</span>: ' + C.fmtNum(sample.plays) + ' plays across ' +
-        C.fmtNum(sample.days) + ' separate days, last heard ' +
-        (sample.daysSinceLast === 0 ? 'today' : sample.daysSinceLast + ' days ago') +
-        ' — score ' + sample.score.toFixed(1) + '.'
-      : '';
+    renderScoreWorking(rows[2] || rows[0]);
+  }
+
+  /** Show the actual arithmetic for one track rather than asserting the result. */
+  function renderScoreWorking(t) {
+    if (!t) { $('explain-example').innerHTML = ''; return; }
+
+    var d4 = function (x) { return x.toFixed(4); };
+    var wDensity = 0.4 * t.density, wVolume = 0.35 * t.volume, wRecency = 0.25 * t.recency;
+    var span = t.rawMax - t.rawMin;
+
+    $('explain-example').innerHTML =
+      '<p class="note working-intro">Worked through for <strong class="bidi">' + esc(t.name) +
+        '</strong> — <span class="bidi">' + esc(t.artist) + '</span>: ' +
+        C.fmtNum(t.plays) + ' plays on ' + C.fmtNum(t.days) + ' separate days, first heard ' +
+        C.fmtNum(t.daysSinceFirst) + ' days ago, last heard ' +
+        (t.daysSinceLast === 0 ? 'today' : C.fmtNum(t.daysSinceLast) + ' days ago') + '.</p>' +
+      '<table class="working">' +
+        workingRow('Spread', C.fmtNum(t.days) + ' days ÷ (' + C.fmtNum(t.daysSinceFirst) + ' + 5)',
+                   d4(t.density), '× 0.40', d4(wDensity)) +
+        workingRow('Volume', 'log₁₀(' + C.fmtNum(t.plays) + ' + 1)',
+                   d4(t.volume), '× 0.35', d4(wVolume)) +
+        workingRow('Recency', 'e^(−0.015 × ' + C.fmtNum(t.daysSinceLast) + ')',
+                   d4(t.recency), '× 0.25', d4(wRecency)) +
+        '<tr class="working-total"><td>Raw score</td><td></td><td></td>' +
+          '<td>' + d4(wDensity) + ' + ' + d4(wVolume) + ' + ' + d4(wRecency) + '</td>' +
+          '<td>' + d4(t.raw) + '</td></tr>' +
+      '</table>' +
+      '<p class="note">Raw scores are then stretched onto a 1–100 scale against everything else ' +
+        'in range (lowest ' + d4(t.rawMin) + ', highest ' + d4(t.rawMax) + '):<br>' +
+        '<span class="mono">1 + 99 × (' + d4(t.raw) + ' − ' + d4(t.rawMin) + ') ÷ ' +
+        d4(span) + ' = <strong>' + t.score.toFixed(2) + '</strong></span></p>';
+  }
+
+  function workingRow(label, formula, value, weight, weighted) {
+    return '<tr><td>' + esc(label) + '</td><td class="mono">' + esc(formula) + '</td>' +
+      '<td class="mono">' + esc(value) + '</td><td class="mono">' + esc(weight) + '</td>' +
+      '<td class="mono">' + esc(weighted) + '</td></tr>';
   }
 
   /* --------------------------------------------------------- playlist -- */
 
-  function renderPlaylist() {
-    var rows = A.playlist(state.data, state.range, 50, referenceMs());
-    state.playlist = rows;
+  function renderPlaylist(rebuild) {
+    if (rebuild || !state.playlist) {
+      var picked = A.playlist(state.data, state.range, 50, referenceMs());
+      // Interleaved, so it reads as one playlist rather than two lists
+      // stapled together.
+      for (var i = picked.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1));
+        var tmp = picked[i]; picked[i] = picked[j]; picked[j] = tmp;
+      }
+      state.playlist = picked;
+    }
+
+    var rows = state.playlist.slice();
+    if ($('playlist-sort').value === 'source') {
+      rows.sort(function (a, b) {
+        if (a.source === b.source) return 0;
+        return a.source === 'On repeat now' ? -1 : 1;
+      });
+    }
 
     $('playlist').innerHTML = rows.length
       ? '<div class="rank-list">' + rows.map(function (t, i) {
@@ -631,12 +721,14 @@
       : '<p class="empty">Not enough tracks in this range to build a playlist.</p>';
 
     bindRankClicks('playlist', function (id) { selectTrack(id); });
+    state.playlistView = rows;
     $('copy-playlist').hidden = !rows.length;
+    $('playlist-sort-wrap').hidden = !rows.length;
   }
 
   function copyPlaylist() {
-    if (!state.playlist) return;
-    var text = state.playlist.map(function (t, i) {
+    if (!state.playlistView) return;
+    var text = state.playlistView.map(function (t, i) {
       return (i + 1) + '. ' + t.name + ' — ' + t.artist;
     }).join('\n');
 
@@ -653,22 +745,24 @@
   /* --------------------------------------------------------- sessions -- */
 
   function renderSessions() {
-    var gap = +$('session-gap').value;
+    var minHours = +$('session-length').value;
     var v = $('session-year').value;
     var year = v === 'all' ? null : +v;
 
-    var summary = A.sessionSummary(state.data, state.range, gap);
-    $('session-summary').innerHTML = 'A session ends after <strong>' + gap +
-      (gap === 1 ? ' hour' : ' hours') + '</strong> of silence. You had <strong>' +
-      C.fmtNum(summary.sessions) + '</strong> of them, averaging <strong>' +
-      C.fmtNum(summary.avgMinutes, 0) + ' minutes</strong>. The longest ran ' +
-      C.fmtNum(summary.longestMinutes / 60, 1) + ' hours' +
-      (summary.longestStart
-        ? ' starting ' + summary.longestStart.toLocaleDateString(undefined,
+    var summary = A.sessionSummary(state.data, state.range, minHours);
+    $('session-summary').innerHTML = 'A session is one unbroken stretch of listening — a pause of ' +
+      'more than ' + summary.breakMinutes + ' minutes starts a new one. You had <strong>' +
+      C.fmtNum(summary.sessions) + '</strong> that ran <strong>' + minHours +
+      (minHours === 1 ? ' hour' : ' hours') + ' or longer</strong>, out of ' +
+      C.fmtNum(summary.allRuns) + ' sessions altogether' +
+      (summary.sessions
+        ? ', averaging ' + C.fmtNum(summary.avgHours, 1) + ' hours. The longest ran ' +
+          C.fmtNum(summary.longestHours, 1) + ' hours, starting ' +
+          summary.longestStart.toLocaleDateString(undefined,
             { day: 'numeric', month: 'long', year: 'numeric' }) + '.'
         : '.');
 
-    var series = A.sessionsPerMonth(state.data, state.range, gap, year);
+    var series = A.sessionsPerMonth(state.data, state.range, minHours, year);
     $('chart-sessions').innerHTML = C.barChart({
       labels: series.map(function (s) { return s.label; }),
       values: series.map(function (s) { return s.value; }),
@@ -780,13 +874,14 @@
       (sub ? '<div class="m-sub">' + sub + '</div>' : '') + '</div>';
   }
 
+  var SHORT_DATE = { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' };
+
   function streakText(streak) {
     if (!streak.longest) return { value: 'No streak yet', sub: '' };
     return {
       value: streak.longest + (streak.longest === 1 ? ' day' : ' days in a row'),
       sub: streak.longest > 1 && streak.longestStart != null
-        ? fmtDay(streak.longestStart, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) +
-          ' → ' + fmtDay(streak.longestEnd, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+        ? fmtDay(streak.longestStart, SHORT_DATE) + ' → ' + fmtDay(streak.longestEnd, SHORT_DATE)
         : ''
     };
   }
@@ -850,8 +945,13 @@
         statCell('Streams', C.fmtNum(a.plays)) +
         statCell('Hours', C.fmtNum(a.hours, 1)) +
         statCell('Rank', a.rank ? '#' + a.rank : '—') +
-        statCell('Tracks', C.fmtNum(a.uniqueTracks)) +
+        '<div class="stat stat-action" id="artist-tracks-toggle" role="button" tabindex="0" ' +
+          'aria-expanded="false" data-tip="See every track by this artist">' +
+          '<span class="stat-label">Tracks</span>' +
+          '<span class="stat-value">' + C.fmtNum(a.uniqueTracks) +
+          '<span class="stat-caret" aria-hidden="true">▾</span></span></div>' +
       '</div>' +
+      '<div id="artist-tracks" class="track-drawer" hidden></div>' +
       '<div class="detail-cols">' +
         '<div>' + C.areaChart({
           labels: a.monthly.map(function (m) { return m.label; }),
@@ -868,6 +968,45 @@
           milestone('Longest streak', st.value, st.sub, 'quiet') +
         '</div>' +
       '</div>';
+
+    wireArtistTrackDrawer(a);
+  }
+
+  /** The "Tracks" tile opens a list of every distinct track by this artist. */
+  function wireArtistTrackDrawer(a) {
+    var toggle = $('artist-tracks-toggle');
+    var drawer = $('artist-tracks');
+    if (!toggle || !drawer) return;
+
+    function open() {
+      if (!drawer.dataset.built) {
+        var rows = A.artistTrackList(state.data, state.range, a.id);
+        var max = rows.length ? rows[0].plays : 1;
+        drawer.innerHTML = '<p class="panel-sub drawer-head">' + C.fmtNum(rows.length) +
+          ' different tracks by ' + esc(a.name) + ', most played first</p>' +
+          '<div class="rank-list">' + rows.map(function (t) {
+            return rankRow({
+              rank: t.rank, name: t.name, sub: t.artist, dataId: t.id, onClick: true,
+              barPct: (t.plays / max) * 100,
+              figure: C.fmtNum(t.plays), figureSub: C.fmtNum(t.hours, 1) + ' h'
+            });
+          }).join('') + '</div>';
+        drawer.dataset.built = '1';
+        bindRankClicks('artist-tracks', function (id) { selectTrack(id); });
+      }
+      drawer.hidden = false;
+      toggle.setAttribute('aria-expanded', 'true');
+    }
+
+    function toggleDrawer() {
+      if (drawer.hidden) open();
+      else { drawer.hidden = true; toggle.setAttribute('aria-expanded', 'false'); }
+    }
+
+    toggle.addEventListener('click', toggleDrawer);
+    toggle.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleDrawer(); }
+    });
   }
 
   /* -------------------------------------------------------- fun facts -- */
@@ -881,10 +1020,12 @@
         '<h3>One year earlier — ' + fmtDay(tt.day) + '</h3>' +
         '<p>You played <strong>' + C.fmtNum(tt.plays) + '</strong> streams (' +
         C.fmtNum(tt.hours, 1) + ' hours) that day.' +
-        (tt.topTrack ? ' On heaviest rotation: <strong class="bidi">' + esc(tt.topTrack.name) +
-          '</strong> by <span class="bidi">' + esc(tt.topTrack.artist) + '</span>.' : '') +
-        (tt.obsession ? ' Your top obsession at the time was <strong class="bidi">' +
-          esc(tt.obsession.name) + '</strong>.' : '') + '</p>';
+        (tt.topTrack ? ' The track you played most that day was <strong class="bidi">' +
+          esc(tt.topTrack.name) + '</strong> — <span class="bidi">' + esc(tt.topTrack.artist) +
+          '</span> (' + C.fmtNum(tt.topTrack.plays) +
+          (tt.topTrack.plays === 1 ? ' play' : ' plays') + ').' : '') +
+        (tt.obsession ? ' Across everything up to that point, your highest "on repeat" score ' +
+          'belonged to <strong class="bidi">' + esc(tt.obsession.name) + '</strong>.' : '') + '</p>';
       $('time-travel').hidden = false;
     } else {
       $('time-travel').hidden = true;
@@ -900,15 +1041,37 @@
     var ls = streakText(s);
     cards.push(fact('Longest streak', ls.value, ls.sub));
 
-    if (f.topArtist) cards.push(fact('Most hours', f.topArtist.name, C.fmtNum(f.topArtist.hours, 0) + ' hours'));
-    if (f.busiestDay) cards.push(fact('Biggest day', fmtDay(f.busiestDay.day), C.fmtNum(f.busiestDay.hours, 1) + ' hours of music'));
-    if (f.bestMonth) cards.push(fact('Biggest month', f.bestMonth.label, C.fmtNum(f.bestMonth.hours, 0) + ' hours'));
-    if (f.firstTrack) {
-      cards.push(fact('Where it starts', f.firstTrack.name,
-        f.firstTrack.artist + ' · ' +
-        f.firstTrack.date.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })));
+    if (s.previous) {
+      cards.push(fact('Previous streak',
+        s.previous.length + (s.previous.length === 1 ? ' day' : ' days in a row'),
+        fmtDay(s.previous.start, SHORT_DATE) + ' → ' + fmtDay(s.previous.end, SHORT_DATE)));
     }
+
+    if (f.topArtist) cards.push(fact('Most hours', f.topArtist.name, C.fmtNum(f.topArtist.hours, 0) + ' hours'));
+    if (f.busiestDay) cards.push(fact('Busiest day', fmtDay(f.busiestDay.day), C.fmtNum(f.busiestDay.hours, 1) + ' hours of music'));
+    if (f.bestMonth) cards.push(fact('Busiest month', f.bestMonth.label, C.fmtNum(f.bestMonth.hours, 0) + ' hours'));
     if (f.mostDiverse) cards.push(fact('Widest catalogue', f.mostDiverse.name, C.fmtNum(f.mostDiverse.count) + ' different tracks played'));
+
+    if (f.longestSitting) {
+      cards.push(fact('Longest sitting', C.fmtNum(f.longestSitting.hours, 1) + ' hours',
+        C.fmtNum(f.longestSitting.plays) + ' tracks without a real break, from ' +
+        f.longestSitting.start.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })));
+    }
+    // Over the whole history every track is a first listen, so the figure only
+    // says something once the dates have been narrowed.
+    var isSubset = state.startDay > state.minDay || state.endDay < state.maxDay;
+    if (f.discoveries && isSubset) {
+      cards.push(fact('New to you', C.fmtNum(f.discoveries) + ' tracks',
+        'First heard inside these dates, never before.'));
+    }
+    if (f.concentration) {
+      cards.push(fact('How focused you are', Math.round(f.concentration * 100) + '%',
+        'of your streams went to just ' + f.topTenCount + ' artists.'));
+    }
+    if (f.lateNightShare) {
+      cards.push(fact('After midnight', Math.round(f.lateNightShare * 100) + '%',
+        'of streams played between midnight and 5am.'));
+    }
 
     $('fact-grid').innerHTML = cards.join('');
   }

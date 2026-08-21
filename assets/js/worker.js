@@ -13,14 +13,19 @@ self.onmessage = function (event) {
     deezerProxy: msg.deezerProxy || null,
     onProgress: function (info) { self.postMessage({ type: 'progress', info: info }); }
   }).then(function (dataset) {
-    // Hand the typed arrays over rather than copying them.
-    var transfer = [
-      dataset.ts.buffer, dataset.sec.buffer, dataset.trackId.buffer,
-      dataset.dayNum.buffer, dataset.year.buffer, dataset.month.buffer,
-      dataset.hour.buffer, dataset.dow.buffer, dataset.platformId.buffer,
-      dataset.reasonId.buffer, dataset.flags.buffer,
-      dataset.trackArtistId.buffer, dataset.trackAlbumId.buffer
-    ];
+    // Hand the typed arrays over rather than copying them. Collected by
+    // walking the payload so a renamed or added array can never be missed.
+    var transfer = [];
+    function collect(value) {
+      if (!value || typeof value !== 'object') return;
+      if (ArrayBuffer.isView(value)) {
+        if (transfer.indexOf(value.buffer) === -1) transfer.push(value.buffer);
+        return;
+      }
+      Object.keys(value).forEach(function (key) { collect(value[key]); });
+    }
+    collect(dataset);
+
     self.postMessage({ type: 'done', dataset: dataset }, transfer);
   }).catch(function (err) {
     self.postMessage({ type: 'error', message: err && err.message ? err.message : String(err) });

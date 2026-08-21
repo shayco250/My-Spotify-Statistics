@@ -18,17 +18,27 @@
  * ========================================================================== */
 
 const DEEZER = 'https://api.deezer.com';
-const CACHE_SECONDS = 60 * 60 * 24 * 30;   // 30 days
 
-// Only these origins may call the Worker. Add your own GitHub Pages URL.
+// A real answer is worth keeping for a long time — ISRCs do not change.
+// A miss is kept only briefly, so one rate-limited minute cannot poison a
+// track's result for a month.
+const HIT_CACHE_SECONDS = 60 * 60 * 24 * 30;   // 30 days
+const MISS_CACHE_SECONDS = 60 * 10;            // 10 minutes
+
+// Sites allowed to call this Worker. Add your own GitHub Pages URL here.
 const ALLOWED_ORIGINS = [
-  'https://shayco250.github.io',
-  'http://localhost:8000',
-  'http://127.0.0.1:8000'
+  'https://shayco250.github.io'
 ];
 
+/** Any localhost port counts as development, so a local test server works
+ *  without editing this file every time the port changes. */
+function isAllowedOrigin(origin) {
+  if (ALLOWED_ORIGINS.includes(origin)) return true;
+  return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+}
+
 function corsHeaders(origin) {
-  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  const allowed = isAllowedOrigin(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
     'Access-Control-Allow-Origin': allowed,
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
@@ -95,25 +105,37 @@ function artistMatches(wanted, contributors, mainArtist) {
   });
 }
 
+/** Deezer throttles bursts. Back off and retry rather than reporting a miss,
+ *  because a miss here means two versions of a song never get merged. */
+async function deezerFetch(url, attempt = 0) {
+  const res = await fetch(url, { cf: { cacheTtl: HIT_CACHE_SECONDS, cacheEverything: true } });
+  if (res.status === 429 && attempt < 3) {
+    await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+    return deezerFetch(url, attempt + 1);
+  }
+  return res;
+}
+
 async function lookupIsrc(artist, track) {
   const query = `artist:"${artist.replace(/"/g, '')}" track:"${track.replace(/"/g, '')}"`;
   const searchUrl = `${DEEZER}/search?q=${encodeURIComponent(query)}&limit=1`;
 
-  const searchRes = await fetch(searchUrl, { cf: { cacheTtl: CACHE_SECONDS, cacheEverything: true } });
-  if (!searchRes.ok) return { isrc: null };
+  const searchRes = await deezerFetch(searchUrl);
+  if (!searchRes.ok) return { isrc: null, transient: true };
 
   const search = await searchRes.json();
+  // Deezer reports throttling in the body with a 200 status.
+  if (search && search.error && search.error.code === 4) return { isrc: null, transient: true };
   if (!search || !Array.isArray(search.data) || !search.data.length) return { isrc: null };
 
   const hit = search.data[0];
   if (!looksLikeMatch(track, hit.title)) return { isrc: null };
 
-  const trackRes = await fetch(`${DEEZER}/track/${hit.id}`, {
-    cf: { cacheTtl: CACHE_SECONDS, cacheEverything: true }
-  });
-  if (!trackRes.ok) return { isrc: null };
+  const trackRes = await deezerFetch(`${DEEZER}/track/${hit.id}`);
+  if (!trackRes.ok) return { isrc: null, transient: true };
 
   const info = await trackRes.json();
+  if (info && info.error && info.error.code === 4) return { isrc: null, transient: true };
   if (!info || !info.isrc) return { isrc: null };
   if (!artistMatches(artist, info.contributors, info.artist && info.artist.name)) {
     return { isrc: null, reason: 'artist mismatch' };
@@ -169,12 +191,18 @@ export default {
       return json({ isrc: null, error: 'Lookup failed.' }, origin, 200);
     }
 
-    await cache.put(cacheKey, new Response(JSON.stringify(result), {
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': `public, max-age=${CACHE_SECONDS}`
-      }
-    }));
+    // Never let a throttled moment stick around as a permanent "not found".
+    const ttl = result.isrc ? HIT_CACHE_SECONDS
+      : (result.transient ? 0 : MISS_CACHE_SECONDS);
+
+    if (ttl > 0) {
+      await cache.put(cacheKey, new Response(JSON.stringify(result), {
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': `public, max-age=${ttl}`
+        }
+      }));
+    }
 
     return json(result, origin, 200, { 'X-Cache': 'MISS' });
   }

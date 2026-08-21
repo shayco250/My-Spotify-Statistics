@@ -46,15 +46,6 @@
 
       <ul class="file-list" id="file-list" hidden></ul>
 
-      <label class="toggle">
-        <input type="checkbox" id="deep-match">
-        <span>
-          <strong>Deep matching</strong>
-          <em>Looks up release codes online to merge versions filed under different titles.
-             Adds a minute or two — the built-in matcher already handles most duplicates.</em>
-        </span>
-      </label>
-
       <button class="btn btn-primary" id="analyze-btn" disabled>Build my report</button>
 
       <p class="privacy">
@@ -121,6 +112,16 @@
       <input type="date" id="date-end">
     </div>
     <button class="btn btn-quiet" id="reset-dates">Reset</button>
+
+    <label class="toggle toggle-inline">
+      <input type="checkbox" id="fold-versions">
+      <span>
+        <strong>Count versions as one song</strong>
+        <em>Off: a remix, live take or extended mix is its own track. On: they all
+            count as the original.</em>
+      </span>
+    </label>
+
     <p class="filter-note" id="filter-note"></p>
   </section>
 
@@ -146,8 +147,8 @@
       <header class="panel-head">
         <h2>Most played tracks</h2>
         <label class="inline-control">
-          Show
-          <select id="track-count"><option>10</option><option>25</option><option>50</option><option>100</option></select>
+          Show top
+          <input type="number" id="track-count" class="count-input" value="10" min="1" max="110" step="1">
         </label>
       </header>
       <div id="top-tracks"></div>
@@ -157,30 +158,23 @@
       <header class="panel-head">
         <h2>Most played artists</h2>
         <label class="inline-control">
-          Show
-          <select id="artist-count"><option>10</option><option>25</option><option>50</option><option>100</option></select>
+          Show top
+          <input type="number" id="artist-count" class="count-input" value="10" min="1" max="110" step="1">
         </label>
       </header>
       <div id="top-artists"></div>
     </section>
   </section>
 
-  <section class="panel-grid">
-    <section class="panel">
-      <header class="panel-head"><h2>Most played albums</h2></header>
-      <div id="top-albums"></div>
-    </section>
-
-    <section class="panel">
-      <header class="panel-head">
-        <h2>Where you listen</h2>
-        <p class="panel-sub">Share of plays by device</p>
-      </header>
-      <div class="donut-row">
-        <div id="platform-donut"></div>
-        <ul class="legend" id="platform-legend"></ul>
-      </div>
-    </section>
+  <section class="panel">
+    <header class="panel-head">
+      <h2>Where you listen</h2>
+      <p class="panel-sub">Share of plays by device</p>
+    </header>
+    <div class="donut-row">
+      <div id="platform-donut"></div>
+      <ul class="legend" id="platform-legend"></ul>
+    </div>
   </section>
 
   <!-- habits ------------------------------------------------------ -->
@@ -205,10 +199,10 @@
         <span class="habit-label">played offline</span>
         <span class="habit-detail">Downloads, planes and dead zones.</span>
       </div>
-      <div class="habit habit-wide">
-        <span class="habit-label">How your plays end</span>
-        <ul class="reason-list" id="habit-reasons"></ul>
-      </div>
+    </div>
+    <div class="habit-wide">
+      <span class="habit-label">How your plays end</span>
+      <ul class="reason-list" id="habit-reasons"></ul>
     </div>
   </section>
 
@@ -218,6 +212,7 @@
       <h2>Listening calendar</h2>
       <label class="inline-control">Year <select id="calendar-year"></select></label>
     </header>
+    <p class="panel-sub panel-sub-block">Days across, months down. Hover any square for the day.</p>
     <div class="scroll-x" id="calendar"></div>
     <div class="heat-legend">
       <span>Quieter</span>
@@ -254,12 +249,13 @@
     <header class="panel-head">
       <h2>On repeat</h2>
       <label class="inline-control">
-        Show <select id="obsession-count"><option>15</option><option>25</option><option>50</option></select>
+        Show top
+        <input type="number" id="obsession-count" class="count-input" value="15" min="1" max="110" step="1">
       </label>
     </header>
     <p class="panel-sub panel-sub-block">
       The tracks you cannot leave alone <em>right now</em> — not just the ones with the biggest
-      lifetime totals.
+      lifetime totals. Each row shows plays, and under it the number of separate days you played it on.
     </p>
     <details class="explain">
       <summary>How the score works</summary>
@@ -268,7 +264,7 @@
         <li><strong>Volume (35%)</strong> — total plays on a log scale, so a new favourite is not buried by an old giant.</li>
         <li><strong>Recency (25%)</strong> — decays quickly once you stop reaching for it.</li>
       </ul>
-      <p id="explain-example" class="note"></p>
+      <div id="explain-example"></div>
     </details>
     <div id="obsession-list"></div>
   </section>
@@ -278,12 +274,20 @@
     <header class="panel-head">
       <h2>Playlist for right now</h2>
       <div class="head-actions">
+        <label class="inline-control" id="playlist-sort-wrap" hidden>
+          Order
+          <select id="playlist-sort">
+            <option value="mixed">Mixed</option>
+            <option value="source">Grouped by source</option>
+          </select>
+        </label>
         <button class="btn btn-quiet" id="copy-playlist" hidden>Copy list</button>
         <button class="btn btn-primary btn-small" id="make-playlist">Build a 50-track playlist</button>
       </div>
     </header>
     <p class="panel-sub panel-sub-block">
-      Half current obsessions, half long-standing favourites, shuffled so it is different every time.
+      Half current obsessions, half long-standing favourites, shuffled together so it is different
+      every time.
     </p>
     <div id="playlist"></div>
   </section>
@@ -294,8 +298,8 @@
       <h2>Listening sessions</h2>
       <div class="head-actions">
         <label class="inline-control">Year <select id="session-year"></select></label>
-        <label class="inline-control">Gap
-          <select id="session-gap">
+        <label class="inline-control">At least
+          <select id="session-length">
             <option value="1">1 hour</option><option value="2">2 hours</option>
             <option value="3" selected>3 hours</option><option value="4">4 hours</option>
             <option value="5">5 hours</option>
@@ -331,7 +335,7 @@
 
   <!-- fun facts --------------------------------------------------- -->
   <section class="panel">
-    <header class="panel-head"><h2>Odds and ends</h2></header>
+    <header class="panel-head"><h2>Worth knowing</h2></header>
     <div id="time-travel" class="callout"></div>
     <div class="fact-grid" id="fact-grid"></div>
   </section>

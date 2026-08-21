@@ -1,6 +1,17 @@
 /* =============================================================================
- * processing.js — parsing, cleaning and track-merging for Spotify
+ * processing.js — parsing, cleaning and track-matching for Spotify
  * Extended Streaming History exports.
+ *
+ * Produces TWO groupings of the same rows, so the report can switch between
+ * them instantly without re-reading the files:
+ *
+ *   strict  — a remix, instrumental or extended mix is its own track.
+ *             This is the default: they really are different recordings.
+ *   folded  — every version collapses into the original song.
+ *
+ * Both groupings still merge the things that are only ever bookkeeping
+ * differences: the same song filed under a single and an album, a remaster,
+ * a reordered credit, or (via ISRC) two labels releasing one master.
  *
  * Loaded twice on purpose:
  *   1. inside the Web Worker (via importScripts in worker.js)
@@ -16,20 +27,33 @@
    * Text normalisation
    * ------------------------------------------------------------------ */
 
-  // Words that mark a *variant* of a recording rather than a different song.
-  // Used to strip "- Radio Edit", "(Extended Mix)", "- Remastered 2011" …
-  var VERSION_WORDS =
-    '(?:remaster(?:ed)?|remix(?:ed)?|mix(?:ed)?|edit|version|live|instrumental|' +
-    'acoustic|unplugged|acapella|a\\s*cappella|reprise|session|radio|extended|' +
-    'club|dub|vip|rework|bootleg|demo|bonus|deluxe|original|sped\\s*up|slowed|' +
-    'reverb|karaoke|cover|mono|stereo|clean|explicit|single|' +
-    'feat\\.?|ft\\.?|featuring)';
+  // Markers that do not change the recording — only how it was packaged.
+  // Stripped for both groupings.
+  var NEUTRAL_MARKERS =
+    '(?:remaster(?:ed)?|radio\\s*edit|edit|mix\\s*cut|explicit|clean|mono|stereo|' +
+    'single\\s*version|album\\s*version|original\\s*mix|original\\s*version|' +
+    'bonus\\s*track|deluxe)';
 
-  var RE_DASH_VERSION = new RegExp('\\s+-\\s+[^-]*' + VERSION_WORDS + '[^-]*$', 'i');
-  var RE_BRACKET_VERSION = new RegExp(
-    '\\s*[\\(\\[][^\\)\\]]*' + VERSION_WORDS + '[^\\)\\]]*[\\)\\]]', 'ig');
+  // Markers for a genuinely different performance or arrangement.
+  // Stripped only when the listener asks for versions to be folded together.
+  var VARIANT_MARKERS =
+    '(?:remix(?:ed)?|instrumental|extended(?:\\s*mix)?|unplugged|acoustic|live|' +
+    'sped\\s*up|slowed|reverb|karaoke|cover|acapella|a\\s*cappella|reprise|' +
+    'demo|session|club\\s*mix|dub\\s*mix|vip\\s*mix|vip|rework|bootleg|' +
+    'mixed|mix|version)';
+
+  function markerRegexes(marker) {
+    return {
+      dash: new RegExp('\\s+-\\s+[^-]*' + marker + '[^-]*$', 'i'),
+      bracket: new RegExp('\\s*[\\(\\[][^\\)\\]]*' + marker + '[^\\)\\]]*[\\)\\]]', 'ig')
+    };
+  }
+
+  var RE_NEUTRAL = markerRegexes(NEUTRAL_MARKERS);
+  var RE_VARIANT = markerRegexes(VARIANT_MARKERS);
   var RE_TRAILING_FEAT = /\s+(?:feat\.?|ft\.?|featuring)\s+.*$/i;
   var RE_FEAT_CAPTURE = /(?:feat\.?|ft\.?|featuring)\s+([^()\[\]]+)/i;
+  var RE_BRACKET_FEAT = /\s*[\(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s[^\)\]]*[\)\]]/ig;
 
   // Splits a credit string into individual artists. Handles every separator the
   // user is likely to meet: "A, B", "A & B", "A and B", "A x B", "A feat. B" …
@@ -44,32 +68,46 @@
       .toLowerCase()
       .normalize('NFKD')
       .replace(/[\u0300-\u036f]/g, '')  // combining marks left by NFKD
-      .replace(/['’`´]/g, '')      // apostrophes: dont === don't
+      .replace(/['’`´]/g, '') // apostrophes: dont === don't
       .replace(/[^\p{L}\p{N}]+/gu, ' ')
       .trim();
   }
 
-  /** Remove version/feat suffixes so "Empty - Extended Mix" === "Empty". */
-  function cleanTrackName(raw) {
-    var original = String(raw == null ? '' : raw).trim();
-    var name = original;
-    var prev;
-
-    // " - Radio Edit", possibly stacked: "Song - Live - Remastered 2011"
-    do {
-      prev = name;
-      name = name.replace(RE_DASH_VERSION, '');
-    } while (name !== prev && name.length);
-
-    name = name.replace(RE_BRACKET_VERSION, '');
-    name = name.replace(RE_TRAILING_FEAT, '');
-    name = name
+  function tidy(name) {
+    return name
       .replace(/\(\s*\)|\[\s*\]/g, '')
       .replace(/\s{2,}/g, ' ')
       .replace(/[\s\-–—,]+$/, '')
       .trim();
+  }
 
-    return name.length ? name : original;
+  function stripMarkers(name, re) {
+    var prev;
+    do {
+      prev = name;
+      name = name.replace(re.dash, '');
+    } while (name !== prev && name.length);
+    return name.replace(re.bracket, '');
+  }
+
+  /**
+   * Two levels of cleaning.
+   *   level 'variant' — drops packaging noise only. "Gravity - Instrumental
+   *                     Mix" keeps its identity; "Radio Ga Ga - Remastered
+   *                     2011" becomes "Radio Ga Ga".
+   *   level 'base'    — also drops the version, so every "Gravity" is one song.
+   */
+  function cleanTrackName(raw, level) {
+    var original = String(raw == null ? '' : raw).trim();
+    var name = original;
+
+    name = stripMarkers(name, RE_NEUTRAL);
+    if (level === 'base') name = stripMarkers(name, RE_VARIANT);
+
+    name = name.replace(RE_BRACKET_FEAT, '').replace(RE_TRAILING_FEAT, '');
+    name = tidy(name);
+
+    return name.length ? name : tidy(original) || original;
   }
 
   /** "Empty (feat. DubVision)" -> "DubVision" */
@@ -95,6 +133,23 @@
     return out;
   }
 
+  /** Human-readable credit list, de-duplicated but in the order given. */
+  function artistList(s) {
+    if (!s) return [];
+    var parts = String(s).split(RE_ARTIST_SPLIT);
+    var seen = Object.create(null);
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var name = parts[i].replace(/[\(\[\)\]]/g, '').trim();
+      if (!name) continue;
+      var key = normText(name);
+      if (!key || seen[key]) continue;
+      seen[key] = 1;
+      out.push(name);
+    }
+    return out;
+  }
+
   /* ---------------------------------------------------------------------
    * Platform / reason-end labelling
    * ------------------------------------------------------------------ */
@@ -107,9 +162,12 @@
     [/windows|win32|winnt/, 'Windows'],
     [/osx|os x|macos|macintosh/, 'Mac'],
     [/linux|ubuntu/, 'Linux'],
-    [/cast|sonos|partner|speaker|alexa|google_home/, 'Speaker / Cast'],
+    [/sonos|alexa|google_home|speaker/, 'Speaker'],
+    [/cast|chromecast/, 'Chromecast'],
     [/xbox|playstation|ps4|ps5/, 'Console'],
-    [/tv|chromecast|roku/, 'TV']
+    [/\btv\b|roku|android_tv|webos|tizen/, 'TV'],
+    [/car|automotive|android_auto|carplay/, 'Car'],
+    [/partner/, 'Partner device']
   ];
 
   function platformLabel(raw) {
@@ -179,36 +237,70 @@
     return best;
   }
 
+  /** Group slots that share a title AND at least one artist. */
+  function mergeByTitleAndArtist(uf, nSlots, titles, tokens) {
+    var buckets = Object.create(null);
+    for (var i = 0; i < nSlots; i++) {
+      var title = titles[i];
+      if (!title) continue;
+      var bucket = buckets[title];
+      if (!bucket) bucket = buckets[title] = Object.create(null);
+      var toks = tokens[i];
+      for (var t = 0; t < toks.length; t++) {
+        var rep = bucket[toks[t]];
+        if (rep === undefined) bucket[toks[t]] = i;
+        else uf.union(rep, i);
+      }
+    }
+  }
+
   /* ---------------------------------------------------------------------
-   * Deezer lookup (optional) — resolves an ISRC per (track, artist) pair.
+   * Deezer lookup — resolves an ISRC and the full credit list per track.
    * Runs through a proxy because Deezer's API sends no CORS headers.
    * ------------------------------------------------------------------ */
 
   // Below this many plays a duplicate is not worth a network round trip.
   var DEEZER_MIN_PLAYS = 5;
+  var CONCURRENCY = 6;
+
+  function normaliseProxy(url) {
+    var u = String(url || '').trim().replace(/\/+$/, '');
+    if (!u) return '';
+    // A bare host would be read as a path relative to the page, and every
+    // request would quietly 404.
+    if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+    return u;
+  }
 
   function fetchIsrcBatch(pairs, proxyUrl, onTick) {
     var results = new Array(pairs.length);
-    var CONCURRENCY = 6;
-    var next = 0, done = 0;
+    var base = normaliseProxy(proxyUrl);
+    var next = 0, done = 0, failed = 0;
 
     return new Promise(function (resolve) {
-      if (!pairs.length) { resolve(results); return; }
+      if (!pairs.length || !base) { resolve({ results: results, failed: 0 }); return; }
 
       function runOne() {
         var i = next++;
         if (i >= pairs.length) return Promise.resolve();
 
         var p = pairs[i];
-        var url = proxyUrl.replace(/\/+$/, '') +
-          '/isrc?artist=' + encodeURIComponent(p.artist) +
+        var url = base + '/isrc?artist=' + encodeURIComponent(p.artist) +
           '&track=' + encodeURIComponent(p.track);
 
         return fetch(url)
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .catch(function () { return null; })
+          .then(function (r) {
+            if (!r.ok) throw new Error('proxy returned ' + r.status);
+            return r.json();
+          })
+          .catch(function () {
+            // A blocked or unreachable proxy must not look like "no match
+            // found" — that difference is the whole point of the pass.
+            failed++;
+            return null;
+          })
           .then(function (data) {
-            if (data && data.isrc) results[i] = data.isrc;
+            if (data && data.isrc) results[i] = data;
             done++;
             if (onTick) onTick(done, pairs.length);
             return runOne();
@@ -217,7 +309,7 @@
 
       var lanes = [];
       for (var c = 0; c < Math.min(CONCURRENCY, pairs.length); c++) lanes.push(runOne());
-      Promise.all(lanes).then(function () { resolve(results); });
+      Promise.all(lanes).then(function () { resolve({ results: results, failed: failed }); });
     });
   }
 
@@ -356,60 +448,60 @@
     uriIndex = null;
 
     var nSlots = slots.length;
-    var slotClean = new Array(nSlots);     // display title, version stripped
-    var slotNorm = new Array(nSlots);      // normalised title, for matching
-    var slotArtist = new Array(nSlots);    // display artist
+    var variantName = new Array(nSlots);   // display title, packaging stripped
+    var variantNorm = new Array(nSlots);   // matching key, versions kept apart
+    var baseName = new Array(nSlots);      // display title, version stripped
+    var baseNorm = new Array(nSlots);      // matching key, versions folded
+    var slotArtist = new Array(nSlots);    // primary (album) artist
+    var slotCredit = new Array(nSlots);    // full credit line, best known
     var slotTokens = new Array(nSlots);    // normalised artist set
 
     for (i = 0; i < nSlots; i++) {
       var rawName = modeOf(slots[i].names);
       var rawArtist = modeOf(slots[i].artists);
-      slotClean[i] = cleanTrackName(rawName);
-      slotNorm[i] = normText(slotClean[i]);
+      variantName[i] = cleanTrackName(rawName, 'variant');
+      variantNorm[i] = normText(variantName[i]);
+      baseName[i] = cleanTrackName(rawName, 'base');
+      baseNorm[i] = normText(baseName[i]);
       slotArtist[i] = rawArtist;
+
       var credit = rawArtist;
       var feat = extractFeat(rawName);
       if (feat) credit += ', ' + feat;
+      slotCredit[i] = credit;
       slotTokens[i] = artistTokens(credit);
     }
 
-    /* ---- 4. Merge identities -------------------------------------------
-     * Two recordings are the same song when they share a normalised title
-     * AND at least one artist. That single rule covers reordered credits
-     * ("A & B" vs "B, A"), different separators, extra featured artists,
-     * and version suffixes — all without guessing.
+    /* ---- 4. Strict grouping ---------------------------------------------
+     * Same title (packaging stripped) plus at least one shared artist.
+     * Requiring a shared artist is what keeps "Gravity" by Martin Garrix
+     * apart from "Gravity" by Holding Absence.
      * ------------------------------------------------------------------ */
-    var uf = makeUnionFind(nSlots);
-    var titleBuckets = Object.create(null);
+    var ufStrict = makeUnionFind(nSlots);
+    mergeByTitleAndArtist(ufStrict, nSlots, variantNorm, slotTokens);
 
-    for (i = 0; i < nSlots; i++) {
-      var title = slotNorm[i];
-      if (!title) continue;
-      var bucket = titleBuckets[title];
-      if (!bucket) bucket = titleBuckets[title] = Object.create(null);
-      var toks = slotTokens[i];
-      for (var t = 0; t < toks.length; t++) {
-        var rep = bucket[toks[t]];
-        if (rep === undefined) bucket[toks[t]] = i;
-        else uf.union(rep, i);
-      }
-    }
-    titleBuckets = null;
-
-    /* ---- 5. Optional Deezer pass: merge by ISRC ------------------------
-     * Catches the leftovers where the same recording is filed under two
-     * spellings, so the title rule above could not see them.
+    /* ---- 5. Deezer pass: merge by ISRC ---------------------------------
+     * Catches masters released by two labels under two primary artists —
+     * the one case no amount of string matching can see.
      * ------------------------------------------------------------------ */
-    var deezerPromise;
+    var deezerCredits = Object.create(null);   // slot -> full credit from Deezer
+    var deezerPromise = Promise.resolve();
+    var lookup = { attempted: 0, failed: 0, matched: 0, merged: 0 };
+
     if (opts.deezerProxy) {
-      // Only bother with titles that still resolve to more than one group
-      // and are played often enough to matter.
       var groupPlays = Object.create(null);
       var groupsPerTitle = Object.create(null);
+      var groupLead = Object.create(null);   // root -> its most played slot
       for (i = 0; i < nSlots; i++) {
-        var root = uf.find(i);
+        var root = ufStrict.find(i);
         groupPlays[root] = (groupPlays[root] || 0) + slots[i].plays;
-        var ttl = slotNorm[i];
+        if (groupLead[root] === undefined ||
+            slots[i].plays > slots[groupLead[root]].plays) {
+          groupLead[root] = i;
+        }
+        // Bucket on the base title so versions of one song land together and
+        // can be compared — but each is still looked up under its own name.
+        var ttl = baseNorm[i];
         if (!ttl) continue;
         if (!groupsPerTitle[ttl]) groupsPerTitle[ttl] = Object.create(null);
         groupsPerTitle[ttl][root] = true;
@@ -424,104 +516,168 @@
           var r = +roots[ri];
           if (seenRoot[r] || (groupPlays[r] || 0) < DEEZER_MIN_PLAYS) continue;
           seenRoot[r] = true;
-          candidates.push({ slot: r, track: slotClean[r], artist: slotArtist[r] });
+          var lead = groupLead[r];
+          // Search under the version-bearing title. Asking Deezer for
+          // "Gravity" when the entry is "Gravity - Instrumental Mix" would
+          // return the original's code and silently fuse the two.
+          candidates.push({ slot: r, track: variantName[lead], artist: slotArtist[lead] });
         }
       }
 
       if (candidates.length) {
+        lookup.attempted = candidates.length;
         report({ phase: 'deezer', current: 0, total: candidates.length });
         deezerPromise = fetchIsrcBatch(candidates, opts.deezerProxy, function (d, tot) {
           report({ phase: 'deezer', current: d, total: tot });
-        }).then(function (isrcs) {
+        }).then(function (batch) {
+          lookup.failed = batch.failed;
+
           // An ISRC identifies one specific recording, so two entries carrying
-          // the same code are the same master — even when Spotify credits them
-          // to different primary artists, which is exactly the case the title
-          // rule above cannot see. The proxy checks the title and the artist
-          // before returning a code, so a wrong code should not reach here.
+          // the same code are the same master. The proxy checks the title and
+          // the artist before returning a code.
           var byIsrc = Object.create(null);
           for (var c = 0; c < candidates.length; c++) {
-            var code = isrcs[c];
-            if (!code) continue;
+            var hit = batch.results[c];
+            if (!hit || !hit.isrc) continue;
+            lookup.matched++;
             var slotIdx = candidates[c].slot;
-            var other = byIsrc[code];
-            if (other === undefined) byIsrc[code] = slotIdx;
-            else uf.union(other, slotIdx);
+            if (hit.artists) deezerCredits[slotIdx] = hit.artists;
+            var other = byIsrc[hit.isrc];
+            if (other === undefined) { byIsrc[hit.isrc] = slotIdx; continue; }
+            if (ufStrict.find(other) !== ufStrict.find(slotIdx)) lookup.merged++;
+            ufStrict.union(other, slotIdx);
           }
         });
-      } else {
-        deezerPromise = Promise.resolve();
       }
-    } else {
-      deezerPromise = Promise.resolve();
     }
 
     return deezerPromise.then(function () {
-      return finalise(cols, order, kept, slots, slotClean, slotArtist, rowSlot, uf, report);
+      /* ---- 6. Folded grouping ------------------------------------------
+       * Everything the strict pass merged, plus versions of the same song.
+       * ---------------------------------------------------------------- */
+      var ufFolded = makeUnionFind(nSlots);
+      for (var s = 0; s < nSlots; s++) ufFolded.union(ufStrict.find(s), s);
+      mergeByTitleAndArtist(ufFolded, nSlots, baseNorm, slotTokens);
+
+      return finalise({
+        cols: cols, order: order, kept: kept, slots: slots, rowSlot: rowSlot,
+        variantName: variantName, baseName: baseName,
+        slotArtist: slotArtist, slotCredit: slotCredit, slotTokens: slotTokens,
+        deezerCredits: deezerCredits,
+        ufStrict: ufStrict, ufFolded: ufFolded,
+        lookup: lookup,
+        report: report
+      });
     });
   }
 
-  function finalise(cols, order, kept, slots, slotClean, slotArtist, rowSlot, uf, report) {
-    report({ phase: 'aggregate', total: kept });
-
-    /* ---- Collapse union-find roots into dense track ids ----------------- */
-    var nSlots = slots.length;
-    var rootToTrack = Object.create(null);
+  /** Collapse union-find roots into dense ids plus display metadata. */
+  function buildGrouping(ctx, uf, displayNames) {
+    var nSlots = ctx.slots.length;
+    var rootToId = Object.create(null);
     var slotTrack = new Int32Array(nSlots);
-    var trackNameVotes = [], trackArtistVotes = [], trackAlbumVotes = [];
+    var nameVotes = [], artistVotes = [], albumVotes = [], creditVotes = [];
 
     for (var i = 0; i < nSlots; i++) {
       var root = uf.find(i);
-      var tid = rootToTrack[root];
-      if (tid === undefined) {
-        tid = trackNameVotes.length;
-        rootToTrack[root] = tid;
-        trackNameVotes.push(Object.create(null));
-        trackArtistVotes.push(Object.create(null));
-        trackAlbumVotes.push(Object.create(null));
+      var id = rootToId[root];
+      if (id === undefined) {
+        id = nameVotes.length;
+        rootToId[root] = id;
+        nameVotes.push(Object.create(null));
+        artistVotes.push(Object.create(null));
+        albumVotes.push(Object.create(null));
+        creditVotes.push(Object.create(null));
       }
-      slotTrack[i] = tid;
-      var p = slots[i].plays;
-      trackNameVotes[tid][slotClean[i]] = (trackNameVotes[tid][slotClean[i]] || 0) + p;
-      trackArtistVotes[tid][slotArtist[i]] = (trackArtistVotes[tid][slotArtist[i]] || 0) + p;
-      for (var alb in slots[i].albums) {
-        trackAlbumVotes[tid][alb] = (trackAlbumVotes[tid][alb] || 0) + slots[i].albums[alb];
+      slotTrack[i] = id;
+
+      var p = ctx.slots[i].plays;
+      nameVotes[id][displayNames[i]] = (nameVotes[id][displayNames[i]] || 0) + p;
+      artistVotes[id][ctx.slotArtist[i]] = (artistVotes[id][ctx.slotArtist[i]] || 0) + p;
+      // Deezer's credit list is the most complete one available, so it wins.
+      var credit = ctx.deezerCredits[i] || ctx.slotCredit[i];
+      var weight = ctx.deezerCredits[i] ? p + 1e6 : p;
+      creditVotes[id][credit] = (creditVotes[id][credit] || 0) + weight;
+      for (var alb in ctx.slots[i].albums) {
+        albumVotes[id][alb] = (albumVotes[id][alb] || 0) + ctx.slots[i].albums[alb];
       }
     }
 
-    var nTracks = trackNameVotes.length;
-    var trackName = new Array(nTracks);
-    var trackArtistId = new Int32Array(nTracks);
-    var trackAlbumId = new Int32Array(nTracks);
-    var artistNames = [], artistIndex = Object.create(null);
-    var albumNames = [], albumIndex = Object.create(null);
+    return {
+      slotTrack: slotTrack,
+      count: nameVotes.length,
+      nameVotes: nameVotes, artistVotes: artistVotes,
+      albumVotes: albumVotes, creditVotes: creditVotes
+    };
+  }
 
-    for (i = 0; i < nTracks; i++) {
-      trackName[i] = modeOf(trackNameVotes[i]) || '(unknown)';
+  /** Turn vote tables into the flat arrays analytics.js consumes. */
+  function materialise(grouping, artistNames, artistIndex, albumNames, albumIndex) {
+    var count = grouping.count;
+    var trackName = new Array(count);
+    var trackCredit = new Array(count);
+    var trackArtistId = new Int32Array(count);
+    var trackAlbumId = new Int32Array(count);
 
-      var aName = modeOf(trackArtistVotes[i]) || '(unknown)';
+    for (var i = 0; i < count; i++) {
+      trackName[i] = modeOf(grouping.nameVotes[i]) || '(unknown)';
+
+      var credit = modeOf(grouping.creditVotes[i]) || '';
+      trackCredit[i] = artistList(credit).join(', ');
+
+      var aName = modeOf(grouping.artistVotes[i]) || '(unknown)';
       var aKey = normText(aName);
       var aid = artistIndex[aKey];
-      if (aid === undefined) { aid = artistNames.length; artistIndex[aKey] = aid; artistNames.push(aName); }
+      if (aid === undefined) {
+        aid = artistNames.length; artistIndex[aKey] = aid; artistNames.push(aName);
+      }
       trackArtistId[i] = aid;
 
-      var albName = modeOf(trackAlbumVotes[i]);
+      var albName = modeOf(grouping.albumVotes[i]);
       if (albName) {
         var albKey = normText(albName) + ' :: ' + aKey;
         var bid = albumIndex[albKey];
-        if (bid === undefined) { bid = albumNames.length; albumIndex[albKey] = bid; albumNames.push(albName); }
+        if (bid === undefined) {
+          bid = albumNames.length; albumIndex[albKey] = bid; albumNames.push(albName);
+        }
         trackAlbumId[i] = bid;
       } else {
         trackAlbumId[i] = -1;
       }
     }
 
-    /* ---- Build the row-level typed arrays ------------------------------- */
+    return { trackName: trackName, trackCredit: trackCredit,
+             trackArtistId: trackArtistId, trackAlbumId: trackAlbumId };
+  }
+
+  function finalise(ctx) {
+    ctx.report({ phase: 'aggregate', total: ctx.kept });
+
+    var cols = ctx.cols, order = ctx.order, kept = ctx.kept;
+
+    var strict = buildGrouping(ctx, ctx.ufStrict, ctx.variantName);
+    var folded = buildGrouping(ctx, ctx.ufFolded, ctx.baseName);
+
+    // Both groupings share one artist and album vocabulary.
+    var artistNames = [], artistIndex = Object.create(null);
+    var albumNames = [], albumIndex = Object.create(null);
+    var strictMeta = materialise(strict, artistNames, artistIndex, albumNames, albumIndex);
+    var foldedMeta = materialise(folded, artistNames, artistIndex, albumNames, albumIndex);
+
+    // strict track id -> folded track id, so the report can switch instantly.
+    var foldMap = new Int32Array(strict.count);
+    for (var s = 0; s < ctx.slots.length; s++) {
+      foldMap[strict.slotTrack[s]] = folded.slotTrack[s];
+    }
+
+    /* ---- Row-level typed arrays ----------------------------------------- */
     var ts = new Float64Array(kept);
     var sec = new Float32Array(kept);
-    var trackId = new Int32Array(kept);
+    var strictTrackId = new Int32Array(kept);
     var dayNum = new Int32Array(kept);
     var year = new Int16Array(kept);
     var month = new Int8Array(kept);
+    var day = new Int8Array(kept);
     var hour = new Int8Array(kept);
     var dow = new Int8Array(kept);
     var platformId = new Int8Array(kept);
@@ -529,28 +685,36 @@
     var flags = new Uint8Array(kept);      // 1 skipped, 2 shuffle, 4 offline
 
     var platformNames = [], platformIdx = Object.create(null);
+    var platformRaw = {};                  // label -> {raw platform: count}
     var reasonNames = [], reasonIdx = Object.create(null);
     var d = new Date();
 
-    for (i = 0; i < kept; i++) {
+    for (var i = 0; i < kept; i++) {
       var src = order[i];
       var t = cols.ts[src];
       ts[i] = t;
       sec[i] = cols.sec[src];
-      trackId[i] = slotTrack[rowSlot[i]];
+      strictTrackId[i] = strict.slotTrack[ctx.rowSlot[i]];
 
       d.setTime(t);
       year[i] = d.getFullYear();
       month[i] = d.getMonth();
+      day[i] = d.getDate();
       hour[i] = d.getHours();
       dow[i] = d.getDay();
-      // Local calendar day, expressed as a day count so it can live in an Int32.
+      // Local calendar day, expressed as a day count so it fits an Int32.
       dayNum[i] = Math.floor((t - d.getTimezoneOffset() * 60000) / 86400000);
 
       var pl = platformLabel(cols.plat[src]);
       var pid = platformIdx[pl];
-      if (pid === undefined) { pid = platformNames.length; platformIdx[pl] = pid; platformNames.push(pl); }
+      if (pid === undefined) {
+        pid = platformNames.length; platformIdx[pl] = pid; platformNames.push(pl);
+        platformRaw[pl] = Object.create(null);
+      }
       platformId[i] = pid;
+      // Keep the raw strings behind "Other" so the report can say what it is.
+      var raw = cols.plat[src] || 'unknown';
+      platformRaw[pl][raw] = (platformRaw[pl][raw] || 0) + 1;
 
       var rl = reasonLabel(cols.rend[src]);
       var rid = reasonIdx[rl];
@@ -560,17 +724,26 @@
       flags[i] = (cols.skip[src] ? 1 : 0) | (cols.shuf[src] ? 2 : 0) | (cols.offl[src] ? 4 : 0);
     }
 
-    var mergedSlots = nSlots - nTracks;
-
     return {
       rowCount: kept,
-      ts: ts, sec: sec, trackId: trackId,
-      dayNum: dayNum, year: year, month: month, hour: hour, dow: dow,
+      ts: ts, sec: sec,
+      strictTrackId: strictTrackId, foldMap: foldMap,
+      dayNum: dayNum, year: year, month: month, day: day, hour: hour, dow: dow,
       platformId: platformId, reasonId: reasonId, flags: flags,
-      trackName: trackName, trackArtistId: trackArtistId, trackAlbumId: trackAlbumId,
+
+      strict: strictMeta,
+      folded: foldedMeta,
+
       artistNames: artistNames, albumNames: albumNames,
-      platformNames: platformNames, reasonNames: reasonNames,
-      stats: { rawUris: nSlots, tracks: nTracks, merged: mergedSlots }
+      platformNames: platformNames, platformRaw: platformRaw,
+      reasonNames: reasonNames,
+
+      stats: {
+        rawUris: ctx.slots.length,
+        strictTracks: strict.count,
+        foldedTracks: folded.count,
+        lookup: ctx.lookup
+      }
     };
   }
 
@@ -578,7 +751,9 @@
     processFiles: processFiles,
     cleanTrackName: cleanTrackName,
     artistTokens: artistTokens,
+    artistList: artistList,
     normText: normText,
-    platformLabel: platformLabel
+    platformLabel: platformLabel,
+    normaliseProxy: normaliseProxy
   };
 })(typeof self !== 'undefined' ? self : this);

@@ -168,57 +168,61 @@
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+  var WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday',
+                  'Thursday', 'Friday', 'Saturday'];
+
+  /**
+   * One row per month, one column per day of the month: the shape of a wall
+   * calendar, so a month's character reads across a single line.
+   */
   function calendarHeatmap(opts) {
     var year = opts.year;
     var counts = opts.counts;          // Map<dayNum, plays>
-    var CELL = 13, GAP = 3, TOPPAD = 20, LEFTPAD = 30;
-
-    var start = new Date(year, 0, 1);
-    var end = new Date(year, 11, 31);
-    var startDay = Math.floor((start.getTime() - start.getTimezoneOffset() * 60000) / DAY_MS);
-    var endDay = Math.floor((end.getTime() - end.getTimezoneOffset() * 60000) / DAY_MS);
+    var CELL = 22, GAP = 4, TOPPAD = 24, LEFTPAD = 40;
 
     var max = 0;
     counts.forEach(function (v) { if (v > max) max = v; });
 
     var parts = [];
-    var weekdayLabels = ['Mon', 'Wed', 'Fri'];
-    var weekdayRows = [0, 2, 4];       // Monday-first rows
 
-    var col = 0;
-    var firstDow = (start.getDay() + 6) % 7;   // Monday = 0
-    var lastMonthLabelled = -1;
-    var totalWeeks = Math.ceil((endDay - startDay + 1 + firstDow) / 7);
+    // Day-of-month scale along the top.
+    for (var dnum = 1; dnum <= 31; dnum++) {
+      parts.push('<text class="axis" x="' +
+        (LEFTPAD + (dnum - 1) * (CELL + GAP) + CELL / 2) + '" y="' + (TOPPAD - 8) +
+        '" text-anchor="middle">' + dnum + '</text>');
+    }
 
-    for (var d = startDay; d <= endDay; d++) {
-      var offset = d - startDay + firstDow;
-      col = Math.floor(offset / 7);
-      var row = offset % 7;
-      var x = LEFTPAD + col * (CELL + GAP);
-      var y = TOPPAD + row * (CELL + GAP);
-      var v = counts.get(d) || 0;
-      var level = v === 0 ? 0 : Math.min(4, Math.ceil((v / max) * 4));
-      var date = new Date(d * DAY_MS);
+    for (var m = 0; m < 12; m++) {
+      var y = TOPPAD + m * (CELL + GAP);
+      parts.push('<text class="axis" x="' + (LEFTPAD - 10) + '" y="' + (y + CELL / 2 + 4) +
+        '" text-anchor="end">' + MONTHS[m] + '</text>');
 
-      parts.push('<rect class="hm-cell" data-level="' + level + '" x="' + x + '" y="' + y +
-        '" width="' + CELL + '" height="' + CELL + '" rx="3" data-tip="' +
-        esc(date.getUTCDate() + ' ' + MONTHS[date.getUTCMonth()] + ' ' + year + ' — ' +
-            (v === 0 ? 'no plays' : fmtNum(v) + (v === 1 ? ' play' : ' plays'))) + '"/>');
+      var daysInMonth = new Date(year, m + 1, 0).getDate();
 
-      if (date.getUTCMonth() !== lastMonthLabelled && date.getUTCDate() <= 7) {
-        lastMonthLabelled = date.getUTCMonth();
-        parts.push('<text class="axis" x="' + x + '" y="' + (TOPPAD - 7) + '">' +
-          MONTHS[lastMonthLabelled] + '</text>');
+      for (var day = 1; day <= 31; day++) {
+        var x = LEFTPAD + (day - 1) * (CELL + GAP);
+        if (day > daysInMonth) {
+          // Keep the grid rectangular but show that the day does not exist.
+          parts.push('<rect class="hm-void" x="' + x + '" y="' + y + '" width="' + CELL +
+            '" height="' + CELL + '" rx="4"/>');
+          continue;
+        }
+
+        var date = new Date(year, m, day);
+        var dayNum = Math.floor((date.getTime() - date.getTimezoneOffset() * 60000) / DAY_MS);
+        var v = counts.get(dayNum) || 0;
+        var level = v === 0 ? 0 : Math.min(4, Math.ceil((v / max) * 4));
+
+        var tip = day + ' ' + MONTHS[m] + ' ' + year + ', ' + WEEKDAYS[date.getDay()] +
+          ' — ' + (v === 0 ? 'no plays' : fmtNum(v) + (v === 1 ? ' play' : ' plays'));
+
+        parts.push('<rect class="hm-cell" data-level="' + level + '" x="' + x + '" y="' + y +
+          '" width="' + CELL + '" height="' + CELL + '" rx="4" data-tip="' + esc(tip) + '"/>');
       }
     }
 
-    weekdayRows.forEach(function (row, i) {
-      parts.push('<text class="axis" x="0" y="' +
-        (TOPPAD + row * (CELL + GAP) + CELL - 2) + '">' + weekdayLabels[i] + '</text>');
-    });
-
-    var W = LEFTPAD + totalWeeks * (CELL + GAP);
-    var H = TOPPAD + 7 * (CELL + GAP);
+    var W = LEFTPAD + 31 * (CELL + GAP);
+    var H = TOPPAD + 12 * (CELL + GAP);
     return '<svg class="chart heatmap" width="' + W + '" height="' + H +
       '" viewBox="0 0 ' + W + ' ' + H + '" role="img">' + parts.join('') + '</svg>';
   }
