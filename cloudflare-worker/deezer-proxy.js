@@ -25,6 +25,10 @@ const DEEZER = 'https://api.deezer.com';
 const HIT_CACHE_SECONDS = 60 * 60 * 24 * 30;   // 30 days
 const MISS_CACHE_SECONDS = 60 * 10;            // 10 minutes
 
+// Bump this to throw away everything cached so far. Needed once because an
+// earlier version stored rate-limited failures as permanent "not found".
+const CACHE_VERSION = 2;
+
 // Sites allowed to call this Worker. Add your own GitHub Pages URL here.
 const ALLOWED_ORIGINS = [
   'https://shayco250.github.io'
@@ -175,7 +179,7 @@ export default {
     // Serve a previously computed answer when we have one.
     const cache = caches.default;
     const cacheKey = new Request(
-      `https://isrc.cache/${encodeURIComponent(artist)}/${encodeURIComponent(track)}`,
+      `https://isrc.cache/v${CACHE_VERSION}/${encodeURIComponent(artist)}/${encodeURIComponent(track)}`,
       { method: 'GET' }
     );
     const cached = await cache.match(cacheKey);

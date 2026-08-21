@@ -27,25 +27,28 @@
    * Text normalisation
    * ------------------------------------------------------------------ */
 
-  // Markers that do not change the recording — only how it was packaged.
-  // Stripped for both groupings.
+  // Cuts of the same performance: a different length, a different mix of the
+  // same take, or just different packaging. These always merge into the
+  // original, because they are the same song by the same people.
   var NEUTRAL_MARKERS =
     '(?:remaster(?:ed)?|radio\\s*edit|edit|mix\\s*cut|explicit|clean|mono|stereo|' +
     'single\\s*version|album\\s*version|original\\s*mix|original\\s*version|' +
-    'bonus\\s*track|deluxe)';
-
-  // Markers for a genuinely different performance or arrangement.
-  // Stripped only when the listener asks for versions to be folded together.
-  var VARIANT_MARKERS =
-    '(?:remix(?:ed)?|instrumental|extended(?:\\s*mix)?|unplugged|acoustic|live|' +
-    'sped\\s*up|slowed|reverb|karaoke|cover|acapella|a\\s*cappella|reprise|' +
-    'demo|session|club\\s*mix|dub\\s*mix|vip\\s*mix|vip|rework|bootleg|' +
+    'bonus\\s*track|deluxe|instrumental|extended(?:\\s*mix|\\s*version)?|' +
+    'club\\s*mix|dub\\s*mix|sped\\s*up|slowed|reverb|acapella|a\\s*cappella|' +
+    'unplugged|acoustic|live|demo|session|reprise|karaoke|cover|' +
     'mixed|mix|version)';
+
+  // Somebody else's rebuild of the track. A remix is a new record, so it keeps
+  // its own identity unless the listener asks for everything to be folded.
+  var VARIANT_MARKERS =
+    '(?:remix(?:ed)?|rework|bootleg|flip|mashup|vip\\s*mix|\\bvip\\b|' +
+    'refix|redux|re-?edit)';
 
   function markerRegexes(marker) {
     return {
       dash: new RegExp('\\s+-\\s+[^-]*' + marker + '[^-]*$', 'i'),
-      bracket: new RegExp('\\s*[\\(\\[][^\\)\\]]*' + marker + '[^\\)\\]]*[\\)\\]]', 'ig')
+      bracket: new RegExp('\\s*[\\(\\[][^\\)\\]]*' + marker + '[^\\)\\]]*[\\)\\]]', 'ig'),
+      contains: new RegExp(marker, 'i')
     };
   }
 
@@ -81,28 +84,49 @@
       .trim();
   }
 
-  function stripMarkers(name, re) {
+  /** Drop packaging markers, but never a segment that names a remix.
+   *  "Extended Mix" and "Remix" both contain "mix", so the remix test has to
+   *  win or every remix would quietly collapse into the original. */
+  function stripNeutral(name) {
+    var keepIfRemix = function (segment) {
+      return RE_VARIANT.contains.test(segment) ? segment : '';
+    };
+
     var prev;
     do {
       prev = name;
-      name = name.replace(re.dash, '');
+      name = name.replace(RE_NEUTRAL.dash, keepIfRemix);
     } while (name !== prev && name.length);
-    return name.replace(re.bracket, '');
+
+    return name.replace(RE_NEUTRAL.bracket, keepIfRemix);
+  }
+
+  function stripVariant(name) {
+    var prev;
+    do {
+      prev = name;
+      name = name.replace(RE_VARIANT.dash, '');
+    } while (name !== prev && name.length);
+    return name.replace(RE_VARIANT.bracket, '');
   }
 
   /**
    * Two levels of cleaning.
-   *   level 'variant' — drops packaging noise only. "Gravity - Instrumental
-   *                     Mix" keeps its identity; "Radio Ga Ga - Remastered
-   *                     2011" becomes "Radio Ga Ga".
-   *   level 'base'    — also drops the version, so every "Gravity" is one song.
+   *   level 'variant' — "Empty - Instrumental Mix" and "Radio Ga Ga -
+   *                     Remastered 2011" both lose their suffix, because they
+   *                     are the same performance. A remix keeps its name.
+   *   level 'base'    — drops the remix too, so everything is one song.
    */
   function cleanTrackName(raw, level) {
     var original = String(raw == null ? '' : raw).trim();
-    var name = original;
+    var name = stripNeutral(original);
 
-    name = stripMarkers(name, RE_NEUTRAL);
-    if (level === 'base') name = stripMarkers(name, RE_VARIANT);
+    if (level === 'base') {
+      name = stripVariant(name);
+      // Removing the remix can expose packaging behind it, e.g.
+      // "Song - Someone Remix - Radio Edit".
+      name = stripNeutral(name);
+    }
 
     name = name.replace(RE_BRACKET_FEAT, '').replace(RE_TRAILING_FEAT, '');
     name = tidy(name);
