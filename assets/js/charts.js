@@ -171,17 +171,35 @@
   var WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday',
                   'Thursday', 'Friday', 'Saturday'];
 
+  /* Fixed play-count bands, so a colour means the same thing whichever year
+     you are looking at and the legend can state real numbers. */
+  var HEAT_BANDS = [
+    { min: 0,   max: 0,        label: '0' },
+    { min: 1,   max: 20,       label: '1–20' },
+    { min: 21,  max: 50,       label: '21–50' },
+    { min: 51,  max: 70,       label: '51–70' },
+    { min: 71,  max: 99,       label: '71–99' },
+    { min: 100, max: 149,      label: '100–149' },
+    { min: 150, max: Infinity, label: '150+' }
+  ];
+
+  function heatLevel(plays) {
+    for (var i = HEAT_BANDS.length - 1; i > 0; i--) {
+      if (plays >= HEAT_BANDS[i].min) return i;
+    }
+    return 0;
+  }
+
   /**
    * One row per month, one column per day of the month: the shape of a wall
    * calendar, so a month's character reads across a single line.
+   *
+   * `year` may be null, meaning every year stacked onto one calendar.
    */
   function calendarHeatmap(opts) {
-    var year = opts.year;
-    var counts = opts.counts;          // Map<dayNum, plays>
+    var year = opts.year;                 // null = all time
+    var counts = opts.counts;             // Map<month * 32 + day, plays>
     var CELL = 22, GAP = 4, TOPPAD = 24, LEFTPAD = 40;
-
-    var max = 0;
-    counts.forEach(function (v) { if (v > max) max = v; });
 
     var parts = [];
 
@@ -197,7 +215,10 @@
       parts.push('<text class="axis" x="' + (LEFTPAD - 10) + '" y="' + (y + CELL / 2 + 4) +
         '" text-anchor="end">' + MONTHS[m] + '</text>');
 
-      var daysInMonth = new Date(year, m + 1, 0).getDate();
+      // Across all years, 29 February exists somewhere.
+      var daysInMonth = year == null
+        ? [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m]
+        : new Date(year, m + 1, 0).getDate();
 
       for (var day = 1; day <= 31; day++) {
         var x = LEFTPAD + (day - 1) * (CELL + GAP);
@@ -208,16 +229,20 @@
           continue;
         }
 
-        var date = new Date(year, m, day);
-        var dayNum = Math.floor((date.getTime() - date.getTimezoneOffset() * 60000) / DAY_MS);
-        var v = counts.get(dayNum) || 0;
-        var level = v === 0 ? 0 : Math.min(4, Math.ceil((v / max) * 4));
+        var v = counts.get(m * 32 + day) || 0;
+        var tip;
+        if (year == null) {
+          tip = day + ' ' + MONTHS[m] + ', every year — ' +
+            (v === 0 ? 'no plays' : fmtNum(v) + (v === 1 ? ' play' : ' plays'));
+        } else {
+          tip = day + ' ' + MONTHS[m] + ' ' + year + ', ' +
+            WEEKDAYS[new Date(year, m, day).getDay()] + ' — ' +
+            (v === 0 ? 'no plays' : fmtNum(v) + (v === 1 ? ' play' : ' plays'));
+        }
 
-        var tip = day + ' ' + MONTHS[m] + ' ' + year + ', ' + WEEKDAYS[date.getDay()] +
-          ' — ' + (v === 0 ? 'no plays' : fmtNum(v) + (v === 1 ? ' play' : ' plays'));
-
-        parts.push('<rect class="hm-cell" data-level="' + level + '" x="' + x + '" y="' + y +
-          '" width="' + CELL + '" height="' + CELL + '" rx="4" data-tip="' + esc(tip) + '"/>');
+        parts.push('<rect class="hm-cell" data-level="' + heatLevel(v) + '" x="' + x +
+          '" y="' + y + '" width="' + CELL + '" height="' + CELL +
+          '" rx="4" data-tip="' + esc(tip) + '"/>');
       }
     }
 
@@ -230,6 +255,37 @@
   /* ---------------------------------------------------------------------
    * Donut
    * ------------------------------------------------------------------ */
+
+  /**
+   * Proportional rectangles across the full width: each block is sized by its
+   * share, so the comparison is a length you read directly rather than an
+   * angle you estimate. Built from HTML rather than SVG because the blocks
+   * have to stretch while their labels stay the right size and shape.
+   */
+  function shareBlocks(opts) {
+    var items = opts.items || [];
+    var total = items.reduce(function (s, i) { return s + i.count; }, 0);
+    if (!total) return emptyState('No plays in this range.');
+
+    var shown = items.slice(0, 6);
+    var shownTotal = shown.reduce(function (s, i) { return s + i.count; }, 0);
+
+    var blocks = shown.map(function (item, i) {
+      var share = item.count / shownTotal;
+      var pct = Math.round(item.share * 100);
+      var label = pct < 1 ? '<1%' : pct + '%';
+
+      return '<div class="share-block" data-c="' + i + '" style="flex-grow:' +
+        share.toFixed(5) + '" data-tip="' +
+        esc(item.name + ' — ' + label + ' (' + fmtNum(item.count) + ' plays)') + '">' +
+        '<span class="share-pct">' + label + '</span>' +
+        '<span class="share-name">' + esc(item.name) + '</span>' +
+        (item.detail ? '<span class="share-detail">' + esc(item.detail) + '</span>' : '') +
+        '</div>';
+    }).join('');
+
+    return '<div class="share-blocks">' + blocks + '</div>';
+  }
 
   function donut(opts) {
     var items = opts.items || [];
@@ -284,7 +340,9 @@
     barChart: barChart,
     areaChart: areaChart,
     calendarHeatmap: calendarHeatmap,
+    shareBlocks: shareBlocks,
     donut: donut,
+    HEAT_BANDS: HEAT_BANDS,
     esc: esc,
     fmtNum: fmtNum
   };

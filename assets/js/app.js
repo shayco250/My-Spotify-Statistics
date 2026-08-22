@@ -210,30 +210,29 @@
    *  actually contains, so narrowing the dates can never leave a chart
    *  pointing at a year with nothing in it. */
   function refreshYearPickers() {
-    var years = A.yearsIn(state.data, state.range);
-    var busiest = busiestYear(state.range);
+    var years = A.yearsIn(state.data, state.range);      // newest first
+    var latest = years.length ? String(years[0]) : '';
+
+    // Where each picker lands when its previous choice is no longer offered.
+    // The calendar and the timeline open on the most recent year, because a
+    // single year is what those two are shaped to show.
+    var fallback = {
+      'calendar-year': latest,
+      'timeline-year': latest,
+      'session-year': 'all'
+    };
 
     ['calendar-year', 'timeline-year', 'session-year'].forEach(function (id) {
       var el = $(id);
       var previous = el.value;
-      var prefix = id === 'calendar-year' ? '' : '<option value="all">All time</option>';
-      el.innerHTML = prefix + years.map(function (y) {
-        return '<option value="' + y + '">' + y + '</option>';
-      }).join('');
+      el.innerHTML = '<option value="all">All time</option>' +
+        years.map(function (y) { return '<option value="' + y + '">' + y + '</option>'; }).join('');
 
-      var stillValid = Array.prototype.some.call(el.options, function (o) { return o.value === previous; });
-      if (stillValid) el.value = previous;
-      else if (id === 'calendar-year') el.value = busiest != null ? String(busiest) : '';
-      else el.value = 'all';
+      var stillValid = Array.prototype.some.call(el.options, function (o) {
+        return o.value === previous;
+      });
+      el.value = stillValid ? previous : fallback[id];
     });
-  }
-
-  function busiestYear(r) {
-    var D = state.data, counts = new Map();
-    for (var i = r.lo; i < r.hi; i++) counts.set(D.year[i], (counts.get(D.year[i]) || 0) + 1);
-    var best = null, bestN = -1;
-    counts.forEach(function (v, k) { if (v > bestN) { bestN = v; best = k; } });
-    return best;
   }
 
   var controlsWired = false;
@@ -274,10 +273,7 @@
     });
 
     $('reset-dates').addEventListener('click', function () {
-      state.startDay = state.minDay;
-      state.endDay = state.maxDay;
-      $('year-quick').value = 'all';
-      syncDateInputs();
+      resetDates();
       refresh();
     });
 
@@ -296,9 +292,11 @@
       refresh();
     });
 
-    bindCountInput('track-count', renderTopTracks);
-    bindCountInput('artist-count', renderTopArtists);
-    bindCountInput('obsession-count', renderObsession);
+    bindCountControl('track-count', renderTopTracks);
+    bindCountControl('artist-count', renderTopArtists);
+    bindCountControl('obsession-count', renderObsession);
+
+    $('reset-all').addEventListener('click', resetEverything);
 
     $('calendar-year').addEventListener('change', renderCalendar);
     $('timeline-year').addEventListener('change', renderTimeline);
@@ -335,19 +333,36 @@
     else if (mq.addListener) mq.addListener(onChange);
   }
 
-  /** A "show top N" box: type any number, clamped to what the input allows. */
-  function bindCountInput(id, render) {
+  /** A "show top N" control: a short list of round numbers, with a checkbox
+   *  that swaps in a box for typing any number up to the input's maximum. */
+  function bindCountControl(id, render) {
+    var select = $(id + '-select');
     var input = $(id);
+    var custom = $(id + '-custom');
     var timer = null;
 
-    function commit() {
+    function clamp(v) {
       var min = +input.min || 1, max = +input.max || 110;
-      var v = Math.round(+input.value);
-      if (!isFinite(v)) v = min;
-      v = Math.min(max, Math.max(min, v));
+      if (!isFinite(v)) return min;
+      return Math.min(max, Math.max(min, Math.round(v)));
+    }
+
+    function commit() {
+      var v = clamp(+input.value);
       if (String(v) !== input.value) input.value = v;
       render();
     }
+
+    custom.addEventListener('change', function () {
+      input.hidden = !custom.checked;
+      select.hidden = custom.checked;
+      // Carry the current number across, so switching modes never jumps.
+      if (custom.checked) input.value = select.value;
+      else select.value = nearestOption(select, +input.value);
+      render();
+    });
+
+    select.addEventListener('change', render);
 
     // Redraw as they type, but not on every keystroke of a two-digit number.
     input.addEventListener('input', function () {
@@ -358,12 +373,60 @@
     input.addEventListener('blur', function () { clearTimeout(timer); commit(); });
   }
 
+  function nearestOption(select, value) {
+    var best = select.options[0].value, gap = Infinity;
+    Array.prototype.forEach.call(select.options, function (o) {
+      var d = Math.abs(+o.value - value);
+      if (d < gap) { gap = d; best = o.value; }
+    });
+    return best;
+  }
+
   function countOf(id) {
+    var custom = $(id + '-custom');
+    if (!custom.checked) return +$(id + '-select').value;
     var input = $(id);
     var min = +input.min || 1, max = +input.max || 110;
     var v = Math.round(+input.value);
     if (!isFinite(v)) return min;
     return Math.min(max, Math.max(min, v));
+  }
+
+  function resetDates() {
+    state.startDay = state.minDay;
+    state.endDay = state.maxDay;
+    $('year-quick').value = 'all';
+    syncDateInputs();
+  }
+
+  /** Put every control on the page back to how it opened. */
+  function resetEverything() {
+    resetDates();
+
+    ['track-count', 'artist-count', 'obsession-count'].forEach(function (id) {
+      var select = $(id + '-select');
+      var input = $(id);
+      var custom = $(id + '-custom');
+      custom.checked = false;
+      input.hidden = true;
+      select.hidden = false;
+      select.value = select.options[0].value;
+      input.value = select.options[0].value;
+    });
+
+    $('fold-versions').checked = false;
+    A.applyGrouping(state.data, false);
+
+    $('session-length').value = '3';
+    $('playlist-sort').value = 'mixed';
+
+    // Year pickers are rebuilt from the range during refresh; clearing the
+    // selections here lets them fall back to their own defaults.
+    $('timeline-year').value = '';
+    $('session-year').value = '';
+    $('calendar-year').value = '';
+
+    refresh();
   }
 
   function clampDay(d) { return Math.min(state.maxDay, Math.max(state.minDay, d)); }
@@ -562,27 +625,39 @@
         '<span class="rl-pct">' + Math.round(r.share * 100) + '%</span></li>';
     }).join('');
 
-    $('platform-donut').innerHTML = C.donut({ items: h.platforms });
-    $('platform-legend').innerHTML = h.platforms.slice(0, 6).map(function (p, i) {
-      // "Other" and "Unknown" say nothing on their own — name what is inside.
-      var needsDetail = (p.name === 'Other' || p.name === 'Unknown') && p.detail;
-      return '<li><span class="dot" data-c="' + i + '"></span>' +
-        '<span class="name">' + esc(p.name) +
-        (needsDetail ? ' <span class="legend-detail">(' + esc(p.detail) + ')</span>' : '') +
-        '</span>' +
-        '<span class="pct">' + (p.share * 100 < 1 ? '<1' : Math.round(p.share * 100)) + '%</span></li>';
-    }).join('');
+    // "Other" and "Unknown" say nothing on their own — name what is inside.
+    var platforms = h.platforms.map(function (p) {
+      var vague = p.name === 'Other' || p.name === 'Unknown';
+      return {
+        name: p.name, count: p.count, share: p.share,
+        detail: vague && p.detail ? p.detail : ''
+      };
+    });
+    $('platform-blocks').innerHTML = C.shareBlocks({ items: platforms });
   }
 
   /* --------------------------------------------------------- calendar -- */
 
   function renderCalendar() {
-    var year = +$('calendar-year').value;
-    if (!year) { $('calendar').innerHTML = '<p class="empty">No year selected.</p>'; return; }
+    var v = $('calendar-year').value;
+    var year = (v === 'all' || v === '') ? null : +v;
     var counts = A.calendar(state.data, state.range, year);
+
     $('calendar').innerHTML = counts.size
       ? C.calendarHeatmap({ year: year, counts: counts })
-      : '<p class="empty">No plays recorded in ' + year + ' within the selected dates.</p>';
+      : '<p class="empty">No plays recorded' + (year ? ' in ' + year : '') +
+        ' within the selected dates.</p>';
+
+    renderHeatLegend();
+  }
+
+  /** The legend states the play counts each colour stands for, so a square's
+   *  shade can be read without hovering it. */
+  function renderHeatLegend() {
+    $('heat-legend').innerHTML = C.HEAT_BANDS.map(function (band, i) {
+      return '<span class="heat-key"><i class="hm-swatch" data-level="' + i + '"></i>' +
+        '<span>' + esc(band.label) + '</span></span>';
+    }).join('') + '<span class="heat-key-note">plays per day</span>';
   }
 
   function renderTimeline() {
@@ -910,7 +985,7 @@
         statCell('Days played', C.fmtNum(t.daysPlayed)) +
       '</div>' +
       '<div class="detail-cols">' +
-        '<div>' + C.areaChart({
+        '<div class="detail-chart">' + C.areaChart({
           labels: t.monthly.map(function (m) { return m.label; }),
           values: t.monthly.map(function (m) { return m.value; }),
           height: 230, unit: 'plays'
@@ -953,7 +1028,7 @@
       '</div>' +
       '<div id="artist-tracks" class="track-drawer" hidden></div>' +
       '<div class="detail-cols">' +
-        '<div>' + C.areaChart({
+        '<div class="detail-chart">' + C.areaChart({
           labels: a.monthly.map(function (m) { return m.label; }),
           values: a.monthly.map(function (m) { return m.value; }),
           height: 230, unit: 'plays'
@@ -1018,14 +1093,8 @@
     if (tt && tt.plays) {
       $('time-travel').innerHTML =
         '<h3>One year earlier — ' + fmtDay(tt.day) + '</h3>' +
-        '<p>You played <strong>' + C.fmtNum(tt.plays) + '</strong> streams (' +
-        C.fmtNum(tt.hours, 1) + ' hours) that day.' +
-        (tt.topTrack ? ' The track you played most that day was <strong class="bidi">' +
-          esc(tt.topTrack.name) + '</strong> — <span class="bidi">' + esc(tt.topTrack.artist) +
-          '</span> (' + C.fmtNum(tt.topTrack.plays) +
-          (tt.topTrack.plays === 1 ? ' play' : ' plays') + ').' : '') +
-        (tt.obsession ? ' Across everything up to that point, your highest "on repeat" score ' +
-          'belonged to <strong class="bidi">' + esc(tt.obsession.name) + '</strong>.' : '') + '</p>';
+        '<p>You played <strong>' + C.fmtNum(tt.plays) + '</strong> streams and listened ' +
+        C.fmtNum(tt.hours, 1) + ' hours that day.</p>';
       $('time-travel').hidden = false;
     } else {
       $('time-travel').hidden = true;

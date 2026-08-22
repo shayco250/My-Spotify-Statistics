@@ -38,10 +38,35 @@
     D.trackId = ids;
     D.trackName = meta.trackName;
     D.trackCredit = meta.trackCredit;
-    D.trackArtistId = meta.trackArtistId;
+    D.trackPrimaryArtistId = meta.trackPrimaryArtistId;
+    D.trackArtistOffsets = meta.trackArtistOffsets;
+    D.trackArtistIds = meta.trackArtistIds;
     D.trackAlbumId = meta.trackAlbumId;
     D.trackCount = meta.trackName.length;
     return D;
+  }
+
+  /* ---------------------------------------------------------------------
+   * Artist credits
+   *
+   * A play of "Martin Garrix, Matisse & Sadko, John Martin" counts once for
+   * each of them. Totals across artists therefore add up to more than the
+   * number of streams, which is the point: it answers "how much of this
+   * artist did I hear", not "how do I divide my listening between them".
+   * ------------------------------------------------------------------ */
+
+  /** Run fn(artistId) for every artist credited on a track. */
+  function eachArtist(D, trackId, fn) {
+    var end = D.trackArtistOffsets[trackId + 1];
+    for (var k = D.trackArtistOffsets[trackId]; k < end; k++) fn(D.trackArtistIds[k]);
+  }
+
+  function trackHasArtist(D, trackId, artistId) {
+    var end = D.trackArtistOffsets[trackId + 1];
+    for (var k = D.trackArtistOffsets[trackId]; k < end; k++) {
+      if (D.trackArtistIds[k] === artistId) return true;
+    }
+    return false;
   }
 
   /* ---------------------------------------------------------------------
@@ -105,10 +130,10 @@
 
   /** Every credited artist, as one line: "Martin Garrix, DubVision, Jaimes". */
   function creditOfTrack(D, trackId) {
-    return D.trackCredit[trackId] || D.artistNames[D.trackArtistId[trackId]];
+    return D.trackCredit[trackId] || D.artistNames[D.trackPrimaryArtistId[trackId]];
   }
 
-  function artistNameOfTrack(D, trackId) { return D.artistNames[D.trackArtistId[trackId]]; }
+  function artistNameOfTrack(D, trackId) { return D.artistNames[D.trackPrimaryArtistId[trackId]]; }
 
   /** Split a sorted day list into runs of consecutive days. */
   function runsFromDays(days) {
@@ -162,7 +187,7 @@
     for (var i = r.lo; i < r.hi; i++) {
       if (D.sec[i] < MIN_STREAM_SEC) continue;
       if (trackId != null && D.trackId[i] !== trackId) continue;
-      if (artistId != null && D.trackArtistId[D.trackId[i]] !== artistId) continue;
+      if (artistId != null && !trackHasArtist(D, D.trackId[i], artistId)) continue;
       var d = D.dayNum[i];
       if (d !== last) { days.push(d); last = d; }
     }
@@ -184,7 +209,7 @@
       streams++;
       var t = D.trackId[i];
       trackPlays.set(t, (trackPlays.get(t) || 0) + 1);
-      artistSeen.add(D.trackArtistId[t]);
+      eachArtist(D, t, function (a) { artistSeen.add(a); });
     }
     hours /= 3600;
 
@@ -226,13 +251,18 @@
   function topArtists(D, r, limit) {
     var plays = new Map(), secs = new Map(), tracksPer = new Map();
     for (var i = r.lo; i < r.hi; i++) {
-      var a = D.trackArtistId[D.trackId[i]];
-      secs.set(a, (secs.get(a) || 0) + D.sec[i]);
-      if (D.sec[i] < MIN_STREAM_SEC) continue;
-      plays.set(a, (plays.get(a) || 0) + 1);
-      var set = tracksPer.get(a);
-      if (!set) { set = new Set(); tracksPer.set(a, set); }
-      set.add(D.trackId[i]);
+      var t = D.trackId[i];
+      var sec = D.sec[i];
+      var counts = sec >= MIN_STREAM_SEC;
+      // Everyone on the record gets the play, including the remixer.
+      eachArtist(D, t, function (a) {
+        secs.set(a, (secs.get(a) || 0) + sec);
+        if (!counts) return;
+        plays.set(a, (plays.get(a) || 0) + 1);
+        var set = tracksPer.get(a);
+        if (!set) { set = new Set(); tracksPer.set(a, set); }
+        set.add(t);
+      });
     }
     return sortedEntriesDesc(plays, limit).map(function (e, idx) {
       return {
@@ -248,7 +278,7 @@
     var plays = new Map(), secs = new Map();
     for (var i = r.lo; i < r.hi; i++) {
       var t = D.trackId[i];
-      if (D.trackArtistId[t] !== artistId) continue;
+      if (!trackHasArtist(D, t, artistId)) continue;
       secs.set(t, (secs.get(t) || 0) + D.sec[i]);
       if (D.sec[i] >= MIN_STREAM_SEC) plays.set(t, (plays.get(t) || 0) + 1);
     }
@@ -348,14 +378,16 @@
     return Array.from(set).sort(function (a, b) { return b - a; });
   }
 
-  /** { dayNum: plays } for one calendar year. */
+  /** Plays per calendar square, keyed by month * 32 + day.
+   *  Pass a year for that year alone, or null to stack every year onto one
+   *  calendar — then 5 March holds every 5 March you ever listened. */
   function calendar(D, r, year) {
     var counts = new Map();
     for (var i = r.lo; i < r.hi; i++) {
-      if (D.year[i] !== year) continue;
+      if (year != null && D.year[i] !== year) continue;
       if (D.sec[i] < MIN_STREAM_SEC) continue;
-      var d = D.dayNum[i];
-      counts.set(d, (counts.get(d) || 0) + 1);
+      var key = D.month[i] * 32 + D.day[i];
+      counts.set(key, (counts.get(key) || 0) + 1);
     }
     return counts;
   }
@@ -625,7 +657,7 @@
 
     for (var i = r.lo; i < r.hi; i++) {
       var t = D.trackId[i];
-      if (D.trackArtistId[t] !== artistId) continue;
+      if (!trackHasArtist(D, t, artistId)) continue;
       secs += D.sec[i];
       if (D.sec[i] < MIN_STREAM_SEC) continue;
       plays++;
@@ -688,22 +720,26 @@
       hoursPerMonth.set(mk, (hoursPerMonth.get(mk) || 0) + D.sec[i]);
 
       var t = D.trackId[i];
-      var a = D.trackArtistId[t];
-      artistSecs.set(a, (artistSecs.get(a) || 0) + D.sec[i]);
+      var sec = D.sec[i];
+      var counts = sec >= MIN_STREAM_SEC;
 
-      if (D.sec[i] < MIN_STREAM_SEC) continue;
+      eachArtist(D, t, function (a) {
+        artistSecs.set(a, (artistSecs.get(a) || 0) + sec);
+        if (!counts) return;
+        artistPlays.set(a, (artistPlays.get(a) || 0) + 1);
+        var set = artistTracks.get(a);
+        if (!set) { set = new Set(); artistTracks.set(a, set); }
+        set.add(t);
+      });
+
+      if (!counts) continue;
       streams++;
       if (D.hour[i] < 5) lateNight++;
-      artistPlays.set(a, (artistPlays.get(a) || 0) + 1);
 
       if (!counted.has(t)) {
         counted.add(t);
         if (firstSeen[t] >= r.lo && firstSeen[t] < r.hi) discoveries++;
       }
-
-      var set = artistTracks.get(a);
-      if (!set) { set = new Set(); artistTracks.set(a, set); }
-      set.add(t);
     }
 
     function argMax(map) {
@@ -787,8 +823,9 @@
       if (D.sec[i] < MIN_STREAM_SEC) continue;
       var t = D.trackId[i];
       trackPlays.set(t, (trackPlays.get(t) || 0) + 1);
-      var a = D.trackArtistId[t];
-      artistPlays.set(a, (artistPlays.get(a) || 0) + 1);
+      eachArtist(D, t, function (a) {
+        artistPlays.set(a, (artistPlays.get(a) || 0) + 1);
+      });
     }
     var tracks = sortedEntriesDesc(trackPlays).map(function (e) {
       return {

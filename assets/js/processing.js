@@ -140,6 +140,17 @@
     return m ? m[1].trim() : '';
   }
 
+  // "No Sleep - DubVision Remix" -> "DubVision". The person who built the
+  // remix worked on that record and should be credited for its plays.
+  var RE_REMIXER = new RegExp(
+    '[-(\\[]\\s*([^-()\\[\\]]+?)\\s+' +
+    '(?:remix|bootleg|flip|mashup|rework|vip\\s*mix|refix|redux|re-?edit)\\b', 'i');
+
+  function extractRemixer(raw) {
+    var m = RE_REMIXER.exec(String(raw == null ? '' : raw));
+    return m ? m[1].trim() : '';
+  }
+
   /** Credit string -> sorted, de-duplicated set of normalised artist names.
    *  Order, separators and casing are all discarded, so
    *  "Martin Garrix and Matisse & Sadko" === "Matisse & Sadko, Martin Garrix". */
@@ -492,8 +503,12 @@
       var credit = rawArtist;
       var feat = extractFeat(rawName);
       if (feat) credit += ', ' + feat;
+      var remixer = extractRemixer(rawName);
+      if (remixer) credit += ', ' + remixer;
       slotCredit[i] = credit;
-      slotTokens[i] = artistTokens(credit);
+      // Matching ignores the remixer: "No Sleep" and "No Sleep - DubVision
+      // Remix" must not merge just because DubVision appears on both.
+      slotTokens[i] = artistTokens(rawArtist + (feat ? ', ' + feat : ''));
     }
 
     /* ---- 4. Strict grouping ---------------------------------------------
@@ -635,31 +650,57 @@
     };
   }
 
-  /** Turn vote tables into the flat arrays analytics.js consumes. */
+  /** Turn vote tables into the flat arrays analytics.js consumes.
+   *
+   *  A track carries every artist credited on it, not just the one Spotify
+   *  filed it under, so a play of a three-way collaboration counts for all
+   *  three. The ids live in one flat array indexed by a per-track offset.
+   */
   function materialise(grouping, artistNames, artistIndex, albumNames, albumIndex) {
     var count = grouping.count;
     var trackName = new Array(count);
     var trackCredit = new Array(count);
-    var trackArtistId = new Int32Array(count);
+    var trackPrimaryArtistId = new Int32Array(count);
     var trackAlbumId = new Int32Array(count);
+    var offsets = new Int32Array(count + 1);
+    var flat = [];
+
+    function idFor(name) {
+      var key = normText(name);
+      var id = artistIndex[key];
+      if (id === undefined) {
+        id = artistNames.length; artistIndex[key] = id; artistNames.push(name);
+      }
+      return id;
+    }
 
     for (var i = 0; i < count; i++) {
       trackName[i] = modeOf(grouping.nameVotes[i]) || '(unknown)';
 
-      var credit = modeOf(grouping.creditVotes[i]) || '';
-      trackCredit[i] = artistList(credit).join(', ');
+      var primaryRaw = modeOf(grouping.artistVotes[i]) || '(unknown)';
 
-      var aName = modeOf(grouping.artistVotes[i]) || '(unknown)';
-      var aKey = normText(aName);
-      var aid = artistIndex[aKey];
-      if (aid === undefined) {
-        aid = artistNames.length; artistIndex[aKey] = aid; artistNames.push(aName);
+      // Split before indexing. Spotify files plenty of tracks under a duo's
+      // joint name, and "Matisse & Sadko" must resolve to the same two people
+      // as a credit that lists them separately, not become a third artist.
+      var names = artistList(modeOf(grouping.creditVotes[i]) || primaryRaw);
+      if (!names.length) names = artistList(primaryRaw);
+      if (!names.length) names = ['(unknown)'];
+      trackCredit[i] = names.join(', ');
+
+      offsets[i] = flat.length;
+      var seen = Object.create(null);
+      for (var n = 0; n < names.length; n++) {
+        var id = idFor(names[n]);
+        if (seen[id]) continue;
+        seen[id] = 1;
+        flat.push(id);
       }
-      trackArtistId[i] = aid;
+      // Whoever leads the credit stands in wherever a single name is needed.
+      trackPrimaryArtistId[i] = idFor(names[0]);
 
       var albName = modeOf(grouping.albumVotes[i]);
       if (albName) {
-        var albKey = normText(albName) + ' :: ' + aKey;
+        var albKey = normText(albName) + ' :: ' + normText(names[0]);
         var bid = albumIndex[albKey];
         if (bid === undefined) {
           bid = albumNames.length; albumIndex[albKey] = bid; albumNames.push(albName);
@@ -669,9 +710,16 @@
         trackAlbumId[i] = -1;
       }
     }
+    offsets[count] = flat.length;
 
-    return { trackName: trackName, trackCredit: trackCredit,
-             trackArtistId: trackArtistId, trackAlbumId: trackAlbumId };
+    return {
+      trackName: trackName,
+      trackCredit: trackCredit,
+      trackPrimaryArtistId: trackPrimaryArtistId,
+      trackArtistOffsets: offsets,
+      trackArtistIds: Int32Array.from(flat),
+      trackAlbumId: trackAlbumId
+    };
   }
 
   function finalise(ctx) {

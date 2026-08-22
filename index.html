@@ -111,14 +111,15 @@
       <label for="date-end">To</label>
       <input type="date" id="date-end">
     </div>
-    <button class="btn btn-quiet" id="reset-dates">Reset</button>
+    <button class="btn btn-quiet" id="reset-dates">Reset dates</button>
+    <button class="btn btn-quiet" id="reset-all">Reset everything</button>
 
     <label class="toggle toggle-inline">
       <input type="checkbox" id="fold-versions">
       <span>
-        <strong>Count versions as one song</strong>
-        <em>Off: a remix, live take or extended mix is its own track. On: they all
-            count as the original.</em>
+        <strong>Count remixes as the original song</strong>
+        <em>Instrumentals, extended mixes and radio edits always count as the original.
+            Tick this to fold remixes in too.</em>
       </span>
     </label>
 
@@ -146,10 +147,19 @@
     <section class="panel">
       <header class="panel-head">
         <h2>Most played tracks</h2>
-        <label class="inline-control">
-          Show top
-          <input type="number" id="track-count" class="count-input" value="10" min="1" max="110" step="1">
-        </label>
+        <div class="count-control">
+          <label class="inline-control">
+            Show top
+            <select id="track-count-select">
+              <option value="10" selected>10</option><option value="25">25</option>
+              <option value="50">50</option><option value="100">100</option>
+            </select>
+            <input type="number" id="track-count" class="count-input" value="10" min="1" max="110" step="1" hidden>
+          </label>
+          <label class="mini-toggle">
+            <input type="checkbox" id="track-count-custom"><span>Type a number</span>
+          </label>
+        </div>
       </header>
       <div id="top-tracks"></div>
     </section>
@@ -157,24 +167,23 @@
     <section class="panel">
       <header class="panel-head">
         <h2>Most played artists</h2>
-        <label class="inline-control">
-          Show top
-          <input type="number" id="artist-count" class="count-input" value="10" min="1" max="110" step="1">
-        </label>
+        <div class="count-control">
+          <label class="inline-control">
+            Show top
+            <select id="artist-count-select">
+              <option value="10" selected>10</option><option value="25">25</option>
+              <option value="50">50</option><option value="100">100</option>
+            </select>
+            <input type="number" id="artist-count" class="count-input" value="10" min="1" max="110" step="1" hidden>
+          </label>
+          <label class="mini-toggle">
+            <input type="checkbox" id="artist-count-custom"><span>Type a number</span>
+          </label>
+        </div>
       </header>
+      <p class="panel-sub panel-sub-block">Every artist on a track gets the play, including remixers.</p>
       <div id="top-artists"></div>
     </section>
-  </section>
-
-  <section class="panel">
-    <header class="panel-head">
-      <h2>Where you listen</h2>
-      <p class="panel-sub">Share of plays by device</p>
-    </header>
-    <div class="donut-row">
-      <div id="platform-donut"></div>
-      <ul class="legend" id="platform-legend"></ul>
-    </div>
   </section>
 
   <!-- habits ------------------------------------------------------ -->
@@ -214,13 +223,7 @@
     </header>
     <p class="panel-sub panel-sub-block">Days across, months down. Hover any square for the day.</p>
     <div class="scroll-x" id="calendar"></div>
-    <div class="heat-legend">
-      <span>Quieter</span>
-      <i class="hm-swatch" data-level="0"></i><i class="hm-swatch" data-level="1"></i>
-      <i class="hm-swatch" data-level="2"></i><i class="hm-swatch" data-level="3"></i>
-      <i class="hm-swatch" data-level="4"></i>
-      <span>Busier</span>
-    </div>
+    <div class="heat-legend" id="heat-legend"></div>
   </section>
 
   <!-- over time --------------------------------------------------- -->
@@ -248,10 +251,19 @@
   <section class="panel">
     <header class="panel-head">
       <h2>On repeat</h2>
-      <label class="inline-control">
-        Show top
-        <input type="number" id="obsession-count" class="count-input" value="15" min="1" max="110" step="1">
-      </label>
+      <div class="count-control">
+        <label class="inline-control">
+          Show top
+          <select id="obsession-count-select">
+            <option value="15" selected>15</option><option value="25">25</option>
+            <option value="50">50</option><option value="100">100</option>
+          </select>
+          <input type="number" id="obsession-count" class="count-input" value="15" min="1" max="110" step="1" hidden>
+        </label>
+        <label class="mini-toggle">
+          <input type="checkbox" id="obsession-count-custom"><span>Type a number</span>
+        </label>
+      </div>
     </header>
     <p class="panel-sub panel-sub-block">
       The tracks you cannot leave alone <em>right now</em> — not just the ones with the biggest
@@ -331,6 +343,15 @@
       <ul class="search-results" id="artist-results" role="listbox" hidden></ul>
     </div>
     <div id="artist-detail"></div>
+  </section>
+
+  <!-- where you listen -------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head">
+      <h2>Where you listen</h2>
+      <p class="panel-sub">Share of plays by device</p>
+    </header>
+    <div id="platform-blocks"></div>
   </section>
 
   <!-- fun facts --------------------------------------------------- -->
