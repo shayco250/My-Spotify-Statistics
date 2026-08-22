@@ -58,10 +58,20 @@
   var RE_FEAT_CAPTURE = /(?:feat\.?|ft\.?|featuring)\s+([^()\[\]]+)/i;
   var RE_BRACKET_FEAT = /\s*[\(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s[^\)\]]*[\)\]]/ig;
 
-  // Splits a credit string into individual artists. Handles every separator the
-  // user is likely to meet: "A, B", "A & B", "A and B", "A x B", "A feat. B" …
+  // Two different jobs, two different splitters.
+  //
+  // Matching only needs to know whether two entries share anybody, so it
+  // splits on everything: "Martin Garrix and Matisse & Sadko" and
+  // "Matisse & Sadko, Martin Garrix" have to look alike.
   var RE_ARTIST_SPLIT =
     /\s*(?:,|&|\+|\/|;|·|\||、)\s*|\s+(?:feat\.?|ft\.?|featuring|with|and|x|vs\.?|versus|meets|presents)\s+/g;
+
+  // Crediting needs the acts as they are billed, and "Matisse & Sadko" is the
+  // name of one duo rather than two artists. A comma separates billed acts;
+  // an ampersand usually sits inside one of their names. This matches how
+  // Deezer lists contributors, which is where most credits come from.
+  var RE_CREDIT_SPLIT =
+    /\s*(?:,|;|、|\|)\s*|\s+(?:feat\.?|ft\.?|featuring)\s+/gi;
 
   /** Lower-case, strip accents and punctuation, collapse whitespace.
    *  Keeps letters/digits of every script, so Hebrew survives intact. */
@@ -168,10 +178,11 @@
     return out;
   }
 
-  /** Human-readable credit list, de-duplicated but in the order given. */
+  /** The acts billed on a track, in the order given and de-duplicated.
+   *  Duos stay whole: "Matisse & Sadko" is one act, not two. */
   function artistList(s) {
     if (!s) return [];
-    var parts = String(s).split(RE_ARTIST_SPLIT);
+    var parts = String(s).split(RE_CREDIT_SPLIT);
     var seen = Object.create(null);
     var out = [];
     for (var i = 0; i < parts.length; i++) {
