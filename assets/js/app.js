@@ -297,6 +297,7 @@
     bindCountControl('obsession-count', renderObsession);
 
     $('reset-all').addEventListener('click', resetEverything);
+    $('day-lookup').addEventListener('change', renderDayLookup);
 
     $('calendar-year').addEventListener('change', renderCalendar);
     $('timeline-year').addEventListener('change', renderTimeline);
@@ -419,6 +420,7 @@
 
     $('session-length').value = '3';
     $('playlist-sort').value = 'mixed';
+    $('day-lookup').value = A.dayNumToIso(state.maxDay);
 
     // Year pickers are rebuilt from the range during refresh; clearing the
     // selections here lets them fall back to their own defaults.
@@ -1088,17 +1090,7 @@
 
   function renderFunFacts() {
     var f = A.funFacts(state.data, state.range);
-    var tt = A.timeTravel(state.data);
-
-    if (tt && tt.plays) {
-      $('time-travel').innerHTML =
-        '<h3>One year earlier — ' + fmtDay(tt.day) + '</h3>' +
-        '<p>You played <strong>' + C.fmtNum(tt.plays) + '</strong> streams and listened ' +
-        C.fmtNum(tt.hours, 1) + ' hours that day.</p>';
-      $('time-travel').hidden = false;
-    } else {
-      $('time-travel').hidden = true;
-    }
+    renderDayLookup();
 
     var cards = [];
     var s = f.streak;
@@ -1143,6 +1135,29 @@
     }
 
     $('fact-grid').innerHTML = cards.join('');
+  }
+
+  /** Pick any single day and see what it held. Opens on the last day the
+   *  export covers, which is the day most people want first. */
+  function renderDayLookup() {
+    var input = $('day-lookup');
+
+    input.min = A.dayNumToIso(state.minDay);
+    input.max = A.dayNumToIso(state.maxDay);
+    if (!input.value) input.value = A.dayNumToIso(state.maxDay);
+
+    var day = A.isoToDayNum(input.value);
+    if (day < state.minDay || day > state.maxDay) {
+      day = clampDay(day);
+      input.value = A.dayNumToIso(day);
+    }
+
+    var d = A.dayDetail(state.data, day);
+    $('day-lookup-result').innerHTML = d.plays
+      ? 'On <strong>' + esc(fmtDay(day)) + '</strong> you played <strong>' +
+        C.fmtNum(d.plays) + '</strong> streams across ' + C.fmtNum(d.uniqueTracks) +
+        ' different tracks, and listened for ' + C.fmtNum(d.hours, 1) + ' hours.'
+      : 'Nothing was played on <strong>' + esc(fmtDay(day)) + '</strong>.';
   }
 
   function fact(label, value, sub) {

@@ -553,8 +553,13 @@ select { cursor: pointer; }
   background: var(--surface-2); border: 1px solid var(--hairline);
   border-radius: var(--radius-sm); padding: 16px 18px; margin-bottom: 18px;
 }
-.callout h3 { font-size: 16px; font-style: italic; margin-bottom: 6px; }
+.callout h3 { font-size: 16px; font-style: italic; }
 .callout p { font-size: 14px; color: var(--ink-soft); }
+.callout-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.day-input { width: auto; padding: 5px 9px; font-size: 13px; }
 
 .fact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
 .fact {

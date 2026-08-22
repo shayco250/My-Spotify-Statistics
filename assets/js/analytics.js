@@ -782,16 +782,12 @@
     };
   }
 
-  /** "One year ago today", measured from the last day in the data. */
-  function timeTravel(D) {
-    var b = bounds(D);
-    var target = b.maxDay - 365;
-    if (target < b.minDay) return null;
-
-    var r = range(D, target, target);
-    if (r.hi <= r.lo) return { day: target, plays: 0, hours: 0, topTrack: null, obsession: null };
-
+  /** What one particular day looked like. Always measured over the whole
+   *  history, so the lookup keeps working whatever the date filter says. */
+  function dayDetail(D, dayNum) {
+    var r = range(D, dayNum, dayNum);
     var plays = 0, secs = 0, trackPlays = new Map();
+
     for (var i = r.lo; i < r.hi; i++) {
       secs += D.sec[i];
       if (D.sec[i] < MIN_STREAM_SEC) continue;
@@ -799,17 +795,11 @@
       trackPlays.set(D.trackId[i], (trackPlays.get(D.trackId[i]) || 0) + 1);
     }
 
-    var best = sortedEntriesDesc(trackPlays, 1)[0];
-    // Obsession as it stood back then: everything up to that day, nothing after.
-    var history = { lo: 0, hi: r.hi };
-    var obs = obsession(D, history, (target + 1) * DAY_MS, 1)[0] || null;
-
     return {
-      day: target,
+      day: dayNum,
       plays: plays,
       hours: secs / 3600,
-      topTrack: best ? { name: D.trackName[best[0]], artist: creditOfTrack(D, best[0]), plays: best[1] } : null,
-      obsession: obs
+      uniqueTracks: trackPlays.size
     };
   }
 
@@ -856,7 +846,7 @@
     sessionsPerMonth: sessionsPerMonth, sessionSummary: sessionSummary,
     obsession: obsession, playlist: playlist,
     trackDetail: trackDetail, artistDetail: artistDetail,
-    funFacts: funFacts, timeTravel: timeTravel,
+    funFacts: funFacts, dayDetail: dayDetail,
     buildSearchIndex: buildSearchIndex,
     streaksFromDays: streaksFromDays,
     creditOfTrack: creditOfTrack
