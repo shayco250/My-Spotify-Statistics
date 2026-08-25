@@ -1,5 +1,7 @@
 # Listening Report
 
+### ▶ [Open the report](https://shayco250.github.io/My-Spotify-Statistics/)
+
 Turn a Spotify **Extended Streaming History** export into a full listening
 report — top tracks and artists, a listening calendar, time-of-day patterns,
 what you had on repeat, skip habits, and per-track and per-artist histories.
@@ -14,22 +16,18 @@ The report uses a Web Worker, which browsers refuse to start from a `file://`
 page, so open it through a local server rather than double-clicking the HTML:
 
 ```bash
-py -3 -m http.server 8765
+python -m http.server 8000
 ```
 
-Then visit <http://127.0.0.1:8765/>. (If the Worker cannot start the report
+Then visit <http://127.0.0.1:8000/>. (If the Worker cannot start, the report
 falls back to processing on the main thread, so it still works — the tab just
 freezes for a moment on very large exports.)
 
-## Publish it on GitHub Pages
+## Hosting
 
-1. Push this folder to GitHub.
-2. **Settings → Pages → Build and deployment**, source **Deploy from a branch**,
-   branch `main`, folder `/ (root)`.
-3. GitHub gives you `https://<your-username>.github.io/<repo>/`.
-
-Static hosting is free with no expiry, and because nothing runs on a server
-there is no cold start — the page opens immediately every time.
+The live site is served by GitHub Pages from `main`, folder `/ (root)`. Static
+hosting is free with no expiry, and because nothing runs on a server there is
+no cold start — the page opens immediately every time.
 
 ## How tracks are matched
 
@@ -88,5 +86,5 @@ assets/js/app.js              screen flow, filters, rendering
 cloudflare-worker/            optional Deezer ISRC proxy
 ```
 
-`new_app.py`, `refactor.py` and `requirements.txt` are the earlier Streamlit
-version, kept for reference.
+`new_app.py` and `requirements.txt` are the earlier Streamlit version, kept for
+reference and no longer maintained.

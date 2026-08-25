@@ -29,8 +29,10 @@ costs a few hundred requests, and cached tracks cost none at all.
 3. Click **Deploy**, then **Edit code**.
 4. Delete everything in the editor and paste the contents of
    [`deezer-proxy.js`](deezer-proxy.js).
-5. In `ALLOWED_ORIGINS` near the top, put the address the report is served
-   from — for GitHub Pages that is `https://<your-username>.github.io`.
+5. `ALLOWED_ORIGINS` near the top lists the sites allowed to call the Worker.
+   It already carries `https://shayco250.github.io`; add your own GitHub Pages
+   address if you fork this. Any `localhost` port is allowed automatically, so
+   a local test server works without editing anything.
 6. Click **Deploy**. Cloudflare shows the Worker's URL, something like
    `https://deezer-isrc.<your-subdomain>.workers.dev`.
 
