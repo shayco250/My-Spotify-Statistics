@@ -19,18 +19,74 @@
      Stage 1 — upload
      ================================================================== -->
 <main id="stage-upload" class="stage stage-upload">
+
+  <!-- Landing backdrop: staves, notes and a record, drawn as outlines so the
+       page stays light and the type stays the loudest thing on it. -->
+  <svg class="backdrop" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <defs>
+      <linearGradient id="bd-wash" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="var(--land-wash-a)"/>
+        <stop offset="55%" stop-color="var(--land-wash-b)"/>
+        <stop offset="100%" stop-color="var(--land-wash-c)"/>
+      </linearGradient>
+      <g id="bd-note">
+        <ellipse cx="0" cy="26" rx="11" ry="8" transform="rotate(-20 0 26)"/>
+        <path d="M11 26V2c8 2 14 5 17 10"/>
+      </g>
+      <g id="bd-beam">
+        <ellipse cx="0" cy="40" rx="10" ry="7.5" transform="rotate(-20 0 40)"/>
+        <ellipse cx="34" cy="33" rx="10" ry="7.5" transform="rotate(-20 34 33)"/>
+        <path d="M10 40V6l34-7v34"/>
+        <path d="M10 12l34-7"/>
+      </g>
+    </defs>
+
+    <rect width="1440" height="900" fill="url(#bd-wash)"/>
+
+    <g class="bd-ink">
+      <g class="bd-stave">
+        <path d="M-60 168C240 118 520 214 820 168s380-96 700-40"/>
+        <path d="M-60 188C240 138 520 234 820 188s380-96 700-40"/>
+        <path d="M-60 208C240 158 520 254 820 208s380-96 700-40"/>
+        <path d="M-60 228C240 178 520 274 820 228s380-96 700-40"/>
+        <path d="M-60 248C240 198 520 294 820 248s380-96 700-40"/>
+      </g>
+      <g class="bd-stave">
+        <path d="M-60 690C300 748 640 636 980 684s300 74 580 26"/>
+        <path d="M-60 710C300 768 640 656 980 704s300 74 580 26"/>
+        <path d="M-60 730C300 788 640 676 980 724s300 74 580 26"/>
+        <path d="M-60 750C300 808 640 696 980 744s300 74 580 26"/>
+        <path d="M-60 770C300 828 640 716 980 764s300 74 580 26"/>
+      </g>
+
+      <g class="bd-record" transform="translate(1210 520)">
+        <circle r="150"/><circle r="112"/><circle r="74"/><circle r="38"/><circle r="11"/>
+      </g>
+
+      <g class="bd-notes">
+        <use href="#bd-note" transform="translate(150 400) scale(1.5)"/>
+        <use href="#bd-beam" transform="translate(300 620) scale(1.15)"/>
+        <use href="#bd-note" transform="translate(620 360) scale(1.1)"/>
+        <use href="#bd-beam" transform="translate(880 470) scale(1.35)"/>
+        <use href="#bd-note" transform="translate(1080 250) scale(1.25)"/>
+        <use href="#bd-note" transform="translate(470 800) scale(0.95)"/>
+        <use href="#bd-beam" transform="translate(1230 810) scale(1)"/>
+        <use href="#bd-note" transform="translate(60 700) scale(1.1)"/>
+      </g>
+    </g>
+  </svg>
+
   <div class="upload-inner">
-    <p class="eyebrow">Runs entirely in your browser</p>
-    <h1>Your years in listening, unpacked.</h1>
+    <h1>Every song you played. Every hour you spent.</h1>
     <p class="lede">
       Drop in the <strong>Extended Streaming History</strong> files Spotify sent you and get the
       whole picture: what you played, when you played it, what you could not stop repeating,
-      and what you kept skipping.
+      and what you kept skipping. 📊
     </p>
 
     <div class="upload-card">
       <label class="field">
-        <span class="field-label">Your Spotify profile link <em>(optional)</em></span>
+        <span class="field-label">🔗 Your Spotify profile link <em>(optional)</em></span>
         <input type="url" id="profile-link" placeholder="https://open.spotify.com/user/…" autocomplete="off">
       </label>
 
@@ -46,7 +102,7 @@
 
       <ul class="file-list" id="file-list" hidden></ul>
 
-      <button class="btn btn-primary" id="analyze-btn" disabled>Build my report</button>
+      <button class="btn btn-primary" id="analyze-btn" disabled>Build my report 🎧</button>
 
       <p class="privacy">
         <svg viewBox="0 0 24 24" aria-hidden="true" class="lock">
@@ -130,14 +186,17 @@
   <section class="hero" aria-label="At a glance">
     <div class="hero-figure">
       <span class="hero-number" id="hero-hours">0</span>
-      <span class="hero-unit">hours of music</span>
+      <span class="hero-unit">
+        hours of music
+        <small class="hero-conversion" id="hero-conversion"></small>
+      </span>
     </div>
     <p class="hero-line" id="hero-line"></p>
     <div class="stat-strip">
-      <div class="stat"><span class="stat-label">Streams</span><span class="stat-value" id="stat-streams">—</span></div>
-      <div class="stat"><span class="stat-label">Different tracks</span><span class="stat-value" id="stat-tracks">—</span></div>
-      <div class="stat"><span class="stat-label">Artists</span><span class="stat-value" id="stat-artists">—</span></div>
-      <div class="stat"><span class="stat-label">Most played</span><span class="stat-value stat-value-text" id="stat-top">—</span></div>
+      <div class="stat"><span class="stat-label">▶ Streams</span><span class="stat-value" id="stat-streams">—</span></div>
+      <div class="stat"><span class="stat-label">🎵 Different tracks</span><span class="stat-value" id="stat-tracks">—</span></div>
+      <div class="stat"><span class="stat-label">🎤 Artists</span><span class="stat-value" id="stat-artists">—</span></div>
+      <div class="stat"><span class="stat-label">🏆 Most played</span><span class="stat-value stat-value-text" id="stat-top">—</span></div>
     </div>
     <p class="merge-note" id="merge-note"></p>
   </section>
@@ -146,13 +205,14 @@
   <section class="panel-grid">
     <section class="panel">
       <header class="panel-head">
-        <h2>Most played tracks</h2>
+        <h2>🎵 Most played tracks</h2>
         <div class="count-control">
           <label class="inline-control">
             Show top
             <select id="track-count-select">
-              <option value="10" selected>10</option><option value="25">25</option>
-              <option value="50">50</option><option value="100">100</option>
+              <option value="5">5</option><option value="10" selected>10</option>
+              <option value="25">25</option><option value="50">50</option>
+              <option value="100">100</option>
             </select>
             <input type="number" id="track-count" class="count-input" value="10" min="1" max="110" step="1" hidden>
           </label>
@@ -166,13 +226,14 @@
 
     <section class="panel">
       <header class="panel-head">
-        <h2>Most played artists</h2>
+        <h2>🎤 Most played artists</h2>
         <div class="count-control">
           <label class="inline-control">
             Show top
             <select id="artist-count-select">
-              <option value="10" selected>10</option><option value="25">25</option>
-              <option value="50">50</option><option value="100">100</option>
+              <option value="5">5</option><option value="10" selected>10</option>
+              <option value="25">25</option><option value="50">50</option>
+              <option value="100">100</option>
             </select>
             <input type="number" id="artist-count" class="count-input" value="10" min="1" max="110" step="1" hidden>
           </label>
@@ -186,26 +247,37 @@
     </section>
   </section>
 
+  <!-- calendar ---------------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head">
+      <h2>🔥 Listening calendar</h2>
+      <label class="inline-control">Year <select id="calendar-year"></select></label>
+    </header>
+    <p class="panel-sub panel-sub-block">Days across, months down. Hover any square for the day.</p>
+    <div class="scroll-x" id="calendar"></div>
+    <div class="heat-legend" id="heat-legend"></div>
+  </section>
+
   <!-- habits ------------------------------------------------------ -->
   <section class="panel">
     <header class="panel-head">
-      <h2>Listening habits</h2>
+      <h2>🎛️ Listening habits</h2>
       <p class="panel-sub">From the fields Spotify records alongside every play</p>
     </header>
     <div class="habit-grid">
       <div class="habit">
         <span class="habit-value" id="habit-skip">—</span>
-        <span class="habit-label">of plays skipped</span>
+        <span class="habit-label">⏭️ of plays skipped</span>
         <span class="habit-detail" id="habit-skip-detail"></span>
       </div>
       <div class="habit">
         <span class="habit-value" id="habit-shuffle">—</span>
-        <span class="habit-label">played on shuffle</span>
+        <span class="habit-label">🔀 played on shuffle</span>
         <span class="habit-detail">The rest you chose deliberately.</span>
       </div>
       <div class="habit">
         <span class="habit-value" id="habit-offline">—</span>
-        <span class="habit-label">played offline</span>
+        <span class="habit-label">✈️ played offline</span>
         <span class="habit-detail">Downloads, planes and dead zones.</span>
       </div>
     </div>
@@ -215,50 +287,46 @@
     </div>
   </section>
 
-  <!-- calendar ---------------------------------------------------- -->
+  <!-- hours per month --------------------------------------------- -->
   <section class="panel">
     <header class="panel-head">
-      <h2>Listening calendar</h2>
-      <label class="inline-control">Year <select id="calendar-year"></select></label>
-    </header>
-    <p class="panel-sub panel-sub-block">Days across, months down. Hover any square for the day.</p>
-    <div class="scroll-x" id="calendar"></div>
-    <div class="heat-legend" id="heat-legend"></div>
-  </section>
-
-  <!-- over time --------------------------------------------------- -->
-  <section class="panel">
-    <header class="panel-head">
-      <h2>Hours over time</h2>
+      <h2>📈 Hours per month</h2>
       <label class="inline-control">Year <select id="timeline-year"></select></label>
     </header>
     <div id="timeline"></div>
   </section>
 
-  <!-- when -------------------------------------------------------- -->
-  <section class="panel-grid">
-    <section class="panel">
-      <header class="panel-head"><h2>Time of day</h2><p class="panel-sub" id="hour-peak"></p></header>
-      <div id="chart-hour"></div>
-    </section>
-    <section class="panel">
-      <header class="panel-head"><h2>Day of the week</h2><p class="panel-sub" id="dow-peak"></p></header>
-      <div id="chart-dow"></div>
-    </section>
+  <!-- day of the week --------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head">
+      <h2>📅 Day of the week</h2>
+      <p class="panel-sub" id="dow-peak"></p>
+    </header>
+    <div id="chart-dow"></div>
+  </section>
+
+  <!-- time of day -------------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head">
+      <h2>🕐 Time of day</h2>
+      <p class="panel-sub" id="hour-peak"></p>
+    </header>
+    <div id="chart-hour"></div>
   </section>
 
   <!-- obsession --------------------------------------------------- -->
   <section class="panel">
     <header class="panel-head">
-      <h2>On repeat</h2>
+      <h2>🔁 On repeat</h2>
       <div class="count-control">
         <label class="inline-control">
           Show top
           <select id="obsession-count-select">
-            <option value="15" selected>15</option><option value="25">25</option>
-            <option value="50">50</option><option value="100">100</option>
+            <option value="5" selected>5</option><option value="15">15</option>
+            <option value="25">25</option><option value="50">50</option>
+            <option value="100">100</option>
           </select>
-          <input type="number" id="obsession-count" class="count-input" value="15" min="1" max="110" step="1" hidden>
+          <input type="number" id="obsession-count" class="count-input" value="5" min="1" max="110" step="1" hidden>
         </label>
         <label class="mini-toggle">
           <input type="checkbox" id="obsession-count-custom"><span>Type a number</span>
@@ -281,33 +349,10 @@
     <div id="obsession-list"></div>
   </section>
 
-  <!-- playlist ---------------------------------------------------- -->
-  <section class="panel">
-    <header class="panel-head">
-      <h2>Playlist for right now</h2>
-      <div class="head-actions">
-        <label class="inline-control" id="playlist-sort-wrap" hidden>
-          Order
-          <select id="playlist-sort">
-            <option value="mixed">Mixed</option>
-            <option value="source">Grouped by source</option>
-          </select>
-        </label>
-        <button class="btn btn-quiet" id="copy-playlist" hidden>Copy list</button>
-        <button class="btn btn-primary btn-small" id="make-playlist">Build a 50-track playlist</button>
-      </div>
-    </header>
-    <p class="panel-sub panel-sub-block">
-      Half current obsessions, half long-standing favourites, shuffled together so it is different
-      every time.
-    </p>
-    <div id="playlist"></div>
-  </section>
-
   <!-- sessions ---------------------------------------------------- -->
   <section class="panel">
     <header class="panel-head">
-      <h2>Listening sessions</h2>
+      <h2>🎧 Listening sessions</h2>
       <div class="head-actions">
         <label class="inline-control">Year <select id="session-year"></select></label>
         <label class="inline-control">At least
@@ -325,7 +370,7 @@
 
   <!-- track lookup ------------------------------------------------ -->
   <section class="panel">
-    <header class="panel-head"><h2>Look up a track</h2></header>
+    <header class="panel-head"><h2>🔍 Look up a track</h2></header>
     <div class="search" data-search="track">
       <input type="text" id="track-search" class="search-input" placeholder="Start typing a track or artist…"
              autocomplete="off" role="combobox" aria-expanded="false" aria-controls="track-results">
@@ -336,7 +381,7 @@
 
   <!-- artist lookup ----------------------------------------------- -->
   <section class="panel">
-    <header class="panel-head"><h2>Look up an artist</h2></header>
+    <header class="panel-head"><h2>🎙️ Look up an artist</h2></header>
     <div class="search" data-search="artist">
       <input type="text" id="artist-search" class="search-input" placeholder="Start typing an artist…"
              autocomplete="off" role="combobox" aria-expanded="false" aria-controls="artist-results">
@@ -348,7 +393,7 @@
   <!-- where you listen -------------------------------------------- -->
   <section class="panel">
     <header class="panel-head">
-      <h2>Where you listen</h2>
+      <h2>📱 Where you listen</h2>
       <p class="panel-sub">Share of plays by device</p>
     </header>
     <div id="platform-blocks"></div>
@@ -356,11 +401,11 @@
 
   <!-- fun facts --------------------------------------------------- -->
   <section class="panel">
-    <header class="panel-head"><h2>Worth knowing</h2></header>
+    <header class="panel-head"><h2>💡 Worth knowing</h2></header>
 
     <div class="callout">
       <div class="callout-head">
-        <h3>Look up a day</h3>
+        <h3>🔭 Look up a day</h3>
         <label class="inline-control">
           Date
           <input type="date" id="day-lookup" class="day-input">
@@ -370,6 +415,29 @@
     </div>
 
     <div class="fact-grid" id="fact-grid"></div>
+  </section>
+
+  <!-- playlist ---------------------------------------------------- -->
+  <section class="panel">
+    <header class="panel-head">
+      <h2>🎲 Playlist for right now</h2>
+      <div class="head-actions">
+        <label class="inline-control" id="playlist-sort-wrap" hidden>
+          Order
+          <select id="playlist-sort">
+            <option value="mixed">Mixed</option>
+            <option value="source">Grouped by source</option>
+          </select>
+        </label>
+        <button class="btn btn-quiet" id="copy-playlist" hidden>Copy list</button>
+        <button class="btn btn-primary btn-small" id="make-playlist">Build a 50-track playlist</button>
+      </div>
+    </header>
+    <p class="panel-sub panel-sub-block">
+      Half current obsessions, half long-standing favourites, shuffled together so it is different
+      every time.
+    </p>
+    <div id="playlist"></div>
   </section>
 
   <footer class="report-foot">

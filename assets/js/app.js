@@ -411,8 +411,12 @@
       custom.checked = false;
       input.hidden = true;
       select.hidden = false;
-      select.value = select.options[0].value;
-      input.value = select.options[0].value;
+      // Back to whichever option the page opened on, not simply the first.
+      var initial = Array.prototype.find.call(select.options, function (o) {
+        return o.defaultSelected;
+      }) || select.options[0];
+      select.value = initial.value;
+      input.value = initial.value;
     });
 
     $('fold-versions').checked = false;
@@ -503,6 +507,10 @@
   function renderGlance() {
     var g = A.glance(state.data, state.range);
     $('hero-hours').textContent = C.fmtNum(g.hours, g.hours < 100 ? 1 : 0);
+
+    // Hours are hard to feel. Minutes and days give the number a scale.
+    $('hero-conversion').textContent = 'That is ' + C.fmtNum(g.hours * 60) +
+      ' minutes, or ' + C.fmtNum(g.hours / 24, 1) + ' days straight';
     $('stat-streams').textContent = C.fmtNum(g.streams);
     $('stat-tracks').textContent = C.fmtNum(g.uniqueTracks);
     $('stat-artists').textContent = C.fmtNum(g.uniqueArtists);
@@ -631,12 +639,23 @@
     var platforms = h.platforms.map(function (p) {
       var vague = p.name === 'Other' || p.name === 'Unknown';
       return {
-        name: p.name, count: p.count, share: p.share,
+        name: platformIcon(p.name) + ' ' + p.name,
+        count: p.count, share: p.share,
         detail: vague && p.detail ? p.detail : ''
       };
     });
     $('platform-blocks').innerHTML = C.shareBlocks({ items: platforms });
   }
+
+  var PLATFORM_ICONS = {
+    'iPhone': '📱', 'iPad': '📱', 'Android': '📱',
+    'Windows': '💻', 'Mac': '💻', 'Linux': '💻',
+    'Web player': '🌐', 'TV': '📺', 'Chromecast': '📺',
+    'Speaker': '🔊', 'Console': '🎮', 'Car': '🚗',
+    'Partner device': '🔌', 'Other': '❓', 'Unknown': '❓'
+  };
+
+  function platformIcon(name) { return PLATFORM_ICONS[name] || '🎧'; }
 
   /* --------------------------------------------------------- calendar -- */
 
@@ -1095,26 +1114,26 @@
     var cards = [];
     var s = f.streak;
 
-    cards.push(fact('Current streak',
+    cards.push(fact('⚡ Current streak',
       s.current ? s.current + (s.current === 1 ? ' day' : ' days') : 'Not listening today',
       s.current ? 'Consecutive days with music.' : 'Play something to start one.'));
 
     var ls = streakText(s);
-    cards.push(fact('Longest streak', ls.value, ls.sub));
+    cards.push(fact('🔥 Longest streak', ls.value, ls.sub));
 
     if (s.previous) {
-      cards.push(fact('Previous streak',
+      cards.push(fact('⏮️ Previous streak',
         s.previous.length + (s.previous.length === 1 ? ' day' : ' days in a row'),
         fmtDay(s.previous.start, SHORT_DATE) + ' → ' + fmtDay(s.previous.end, SHORT_DATE)));
     }
 
-    if (f.topArtist) cards.push(fact('Most hours', f.topArtist.name, C.fmtNum(f.topArtist.hours, 0) + ' hours'));
-    if (f.busiestDay) cards.push(fact('Busiest day', fmtDay(f.busiestDay.day), C.fmtNum(f.busiestDay.hours, 1) + ' hours of music'));
-    if (f.bestMonth) cards.push(fact('Busiest month', f.bestMonth.label, C.fmtNum(f.bestMonth.hours, 0) + ' hours'));
-    if (f.mostDiverse) cards.push(fact('Widest catalogue', f.mostDiverse.name, C.fmtNum(f.mostDiverse.count) + ' different tracks played'));
+    if (f.topArtist) cards.push(fact('👑 Most hours', f.topArtist.name, C.fmtNum(f.topArtist.hours, 0) + ' hours'));
+    if (f.busiestDay) cards.push(fact('📆 Busiest day', fmtDay(f.busiestDay.day), C.fmtNum(f.busiestDay.hours, 1) + ' hours of music'));
+    if (f.bestMonth) cards.push(fact('🗓️ Busiest month', f.bestMonth.label, C.fmtNum(f.bestMonth.hours, 0) + ' hours'));
+    if (f.mostDiverse) cards.push(fact('📚 Widest catalogue', f.mostDiverse.name, C.fmtNum(f.mostDiverse.count) + ' different tracks played'));
 
     if (f.longestSitting) {
-      cards.push(fact('Longest sitting', C.fmtNum(f.longestSitting.hours, 1) + ' hours',
+      cards.push(fact('⏳ Longest sitting', C.fmtNum(f.longestSitting.hours, 1) + ' hours',
         C.fmtNum(f.longestSitting.plays) + ' tracks without a real break, from ' +
         f.longestSitting.start.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })));
     }
@@ -1122,15 +1141,15 @@
     // says something once the dates have been narrowed.
     var isSubset = state.startDay > state.minDay || state.endDay < state.maxDay;
     if (f.discoveries && isSubset) {
-      cards.push(fact('New to you', C.fmtNum(f.discoveries) + ' tracks',
+      cards.push(fact('✨ New to you', C.fmtNum(f.discoveries) + ' tracks',
         'First heard inside these dates, never before.'));
     }
     if (f.concentration) {
-      cards.push(fact('How focused you are', Math.round(f.concentration * 100) + '%',
+      cards.push(fact('🎯 How focused you are', Math.round(f.concentration * 100) + '%',
         'of your streams went to just ' + f.topTenCount + ' artists.'));
     }
     if (f.lateNightShare) {
-      cards.push(fact('After midnight', Math.round(f.lateNightShare * 100) + '%',
+      cards.push(fact('🌙 After midnight', Math.round(f.lateNightShare * 100) + '%',
         'of streams played between midnight and 5am.'));
     }
 

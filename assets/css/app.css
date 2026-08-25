@@ -23,6 +23,14 @@
   --warn:        #B4581F;
   --shadow:      0 1px 2px rgba(36, 29, 44, .05), 0 10px 28px -18px rgba(36, 29, 44, .35);
 
+  /* Landing backdrop: a pale lilac-to-sky wash under deep-blue line art. */
+  --land-wash-a: #E7E2FA;
+  --land-wash-b: #DCE9F7;
+  --land-wash-c: #F2ECF8;
+  --land-ink:    #1B2A66;
+  /* The same line art, far fainter, drifting behind the report itself. */
+  --report-ink:  #6E6276;
+
   /* Calendar bands: 0, 1–20, 21–50, 51–70, 71–99, 100–149, 150+ */
   --heat-0:      #E3DAE7;
   --heat-1:      #FBE6B4;
@@ -57,6 +65,11 @@
     --accent-2:    #4FB3A7;
     --good:        #6CC98D;
     --warn:        #E8935B;
+    --land-wash-a: #241E3A;
+    --land-wash-b: #1C2740;
+    --land-wash-c: #251F33;
+    --land-ink:    #9FB4E8;
+    --report-ink:  #9C8FA6;
     --heat-0:      #362C3F;
     --heat-1:      #5C4A2A;
     --heat-2:      #82652C;
@@ -83,6 +96,11 @@
   --accent-2:    #4FB3A7;
   --good:        #6CC98D;
   --warn:        #E8935B;
+  --land-wash-a: #241E3A;
+  --land-wash-b: #1C2740;
+  --land-wash-c: #251F33;
+  --land-ink:    #9FB4E8;
+  --report-ink:  #9C8FA6;
   --heat-0:      #362C3F;
   --heat-1:      #5C4A2A;
   --heat-2:      #82652C;
@@ -154,14 +172,46 @@ a { color: var(--accent-2); }
 /* ------------------------------------------------------------ 1. upload -- */
 
 .stage-upload {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 56px 20px;
+  overflow: hidden;
 }
 
-.upload-inner { width: 100%; max-width: 620px; text-align: center; }
+/* ---- landing backdrop ---------------------------------------------------
+   A pale lilac wash with staves, notes and a record drawn as thin outlines.
+   It sits behind everything and never competes with the type: the ink is
+   low-opacity and the card above it is opaque. */
+.backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+.bd-ink {
+  fill: none;
+  stroke: var(--land-ink);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.bd-stave { opacity: .30; }
+.bd-record { opacity: .22; stroke-width: 2; }
+.bd-notes { opacity: .34; stroke-width: 2.1; }
+.bd-notes ellipse { fill: var(--land-ink); fill-opacity: .12; }
+
+.upload-inner {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 620px;
+  text-align: center;
+}
 
 .stage-upload h1 {
   font-size: clamp(34px, 6vw, 54px);
@@ -310,7 +360,27 @@ select { cursor: pointer; }
 
 /* ------------------------------------------------------------ 3. report -- */
 
-.stage-report { max-width: var(--maxw); margin: 0 auto; padding: 40px 20px 80px; min-width: 760px; }
+/* The report carries the same motif, but barely there — a texture you notice
+   only in the gaps between panels, never something to read past. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: .05;
+  background-repeat: repeat;
+  background-size: 460px 460px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='460' height='460' viewBox='0 0 460 460'%3E%3Cg fill='none' stroke='%236E6276' stroke-width='3' stroke-linecap='round'%3E%3Cellipse cx='70' cy='96' rx='15' ry='11' transform='rotate(-20 70 96)'/%3E%3Cpath d='M85 96V44c11 3 19 7 23 14'/%3E%3Cellipse cx='300' cy='300' rx='13' ry='10' transform='rotate(-20 300 300)'/%3E%3Cellipse cx='346' cy='291' rx='13' ry='10' transform='rotate(-20 346 291)'/%3E%3Cpath d='M313 300v-46l46-9v46M313 263l46-9'/%3E%3Ccircle cx='380' cy='110' r='44'/%3E%3Ccircle cx='380' cy='110' r='24'/%3E%3Ccircle cx='380' cy='110' r='6'/%3E%3Cpath d='M-20 200c90-26 170 22 250 0s130-30 250-6'/%3E%3Cpath d='M-20 214c90-26 170 22 250 0s130-30 250-6'/%3E%3Cpath d='M-20 420c90 20 170-16 250 4s130 22 250 2'/%3E%3Cpath d='M-20 434c90 20 170-16 250 4s130 22 250 2'/%3E%3Cellipse cx='150' cy='386' rx='13' ry='10' transform='rotate(-20 150 386)'/%3E%3Cpath d='M163 386v-44c9 3 16 6 20 12'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+.stage-report {
+  position: relative;
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 40px 20px 80px;
+  min-width: 760px;
+}
 .stage-report[hidden] { display: none; }
 
 .report-head {
@@ -340,7 +410,14 @@ select { cursor: pointer; }
   font-size: clamp(58px, 12vw, 116px); line-height: .92; letter-spacing: -.02em;
   font-variant-numeric: tabular-nums;
 }
-.hero-unit { font-family: var(--font-display); font-style: italic; font-size: 21px; color: var(--muted); }
+.hero-unit {
+  font-family: var(--font-display); font-style: italic; font-size: 21px; color: var(--muted);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.hero-conversion {
+  font-family: var(--font-body); font-style: normal; font-size: 12.5px;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
 .hero-line { color: var(--muted); font-size: 14.5px; margin: 12px 0 26px; }
 .hero-line strong { color: var(--ink); font-weight: 600; }
 
