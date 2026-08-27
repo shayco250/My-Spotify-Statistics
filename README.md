@@ -85,6 +85,3 @@ assets/js/charts.js           hand-written SVG charts, no chart library
 assets/js/app.js              screen flow, filters, rendering
 cloudflare-worker/            optional Deezer ISRC proxy
 ```
-
-`new_app.py` and `requirements.txt` are the earlier Streamlit version, kept for
-reference and no longer maintained.
