@@ -314,7 +314,6 @@
   function habits(D, r) {
     var total = 0, skipped = 0, shuffled = 0, offline = 0;
     var platforms = new Map(), reasons = new Map();
-    var skipPerTrack = new Map();
 
     for (var i = r.lo; i < r.hi; i++) {
       total++;
@@ -331,27 +330,14 @@
       var rn = D.reasonId[i];
       reasons.set(rn, (reasons.get(rn) || 0) + 1);
 
-      var t = D.trackId[i];
-      var e = skipPerTrack.get(t);
-      if (!e) { e = { total: 0, skipped: 0 }; skipPerTrack.set(t, e); }
-      e.total++;
-      if (isSkip) e.skipped++;
     }
-
-    var worst = null;
-    skipPerTrack.forEach(function (e, t) {
-      if (e.total < 8) return;
-      var rate = e.skipped / e.total;
-      if (!worst || rate > worst.rate) {
-        worst = { rate: rate, id: t, name: D.trackName[t], artist: creditOfTrack(D, t), plays: e.total };
-      }
-    });
 
     return {
       total: total,
       skipRate: total ? skipped / total : 0,
       shuffleRate: total ? shuffled / total : 0,
       offlineRate: total ? offline / total : 0,
+      offlinePlays: offline,
       platforms: sortedEntriesDesc(platforms).map(function (e) {
         var label = D.platformNames[e[0]];
         return {
@@ -363,8 +349,7 @@
       }),
       reasons: sortedEntriesDesc(reasons, 5).map(function (e) {
         return { name: D.reasonNames[e[0]], count: e[1], share: e[1] / total };
-      }),
-      mostSkipped: worst
+      })
     };
   }
 

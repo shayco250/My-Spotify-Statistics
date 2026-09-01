@@ -219,7 +219,7 @@
     var fallback = {
       'calendar-year': latest,
       'timeline-year': latest,
-      'session-year': 'all'
+      'session-year': latest
     };
 
     ['calendar-year', 'timeline-year', 'session-year'].forEach(function (id) {
@@ -310,6 +310,7 @@
     setupSearch('track');
     setupSearch('artist');
     setupTooltip();
+    setupChartZoom();
     watchColourScheme();
   }
 
@@ -424,6 +425,7 @@
 
     $('session-length').value = '3';
     $('playlist-sort').value = 'mixed';
+    $('session-year').value = '';
     $('day-lookup').value = A.dayNumToIso(state.maxDay);
 
     // Year pickers are rebuilt from the range during refresh; clearing the
@@ -619,12 +621,13 @@
 
     $('habit-skip').textContent = Math.round(h.skipRate * 100) + '%';
     $('habit-shuffle').textContent = Math.round(h.shuffleRate * 100) + '%';
-    $('habit-offline').textContent = Math.round(h.offlineRate * 100) + '%';
+    // Offline listening is often a fraction of a percent, so a rounded
+    // integer would just read "0%" and say nothing.
+    $('habit-offline').textContent = C.fmtNum(h.offlineRate * 100, 3) + '%';
+    $('habit-offline-detail').textContent = C.fmtNum(h.offlinePlays) +
+      (h.offlinePlays === 1 ? ' play' : ' plays') + ' with no connection.';
 
-    $('habit-skip-detail').innerHTML = h.mostSkipped
-      ? 'Most abandoned: <span class="bidi">' + esc(h.mostSkipped.name) + '</span> (' +
-        Math.round(h.mostSkipped.rate * 100) + '% of its plays)'
-      : 'No track has enough plays to single out yet.';
+    $('habit-skip-detail').textContent = 'Under 30 seconds, or skipped outright.';
 
     // Bars are scaled against the biggest slice so the row reads as a
     // comparison, not as a set of near-empty tracks.
@@ -1006,7 +1009,7 @@
         statCell('Days played', C.fmtNum(t.daysPlayed)) +
       '</div>' +
       '<div class="detail-cols">' +
-        '<div class="detail-chart">' + C.areaChart({
+        '<div class="detail-chart">' + expandButton() + C.areaChart({
           labels: t.monthly.map(function (m) { return m.label; }),
           values: t.monthly.map(function (m) { return m.value; }),
           height: 230, unit: 'plays'
@@ -1049,7 +1052,7 @@
       '</div>' +
       '<div id="artist-tracks" class="track-drawer" hidden></div>' +
       '<div class="detail-cols">' +
-        '<div class="detail-chart">' + C.areaChart({
+        '<div class="detail-chart">' + expandButton() + C.areaChart({
           labels: a.monthly.map(function (m) { return m.label; }),
           values: a.monthly.map(function (m) { return m.value; }),
           height: 230, unit: 'plays'
@@ -1183,6 +1186,56 @@
     return '<div class="fact"><div class="f-label">' + esc(label) + '</div>' +
       '<div class="f-value bidi">' + esc(value) + '</div>' +
       (sub ? '<div class="f-sub bidi">' + esc(sub) + '</div>' : '') + '</div>';
+  }
+
+  /* ------------------------------------------------------ chart zoom -- */
+
+  /** A small control in the corner of a chart that opens it full-screen.
+   *  The detail charts are the narrow column of a two-column row, so a long
+   *  history is squeezed into a few hundred pixels until you enlarge it. */
+  function expandButton() {
+    return '<button type="button" class="chart-expand" aria-label="Enlarge this chart" ' +
+      'data-tip="Enlarge this chart">' +
+      '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+      '<path d="M15 3h6v6M9 21H3v-6M21 3l-8 8M3 21l8-8"/></svg></button>';
+  }
+
+  /** Opens whichever chart's button was pressed in an overlay. The chart is
+   *  an SVG with a viewBox, so it simply redraws at the larger size. */
+  function setupChartZoom() {
+    var overlay = $('chart-zoom');
+    var body = $('chart-zoom-body');
+    var title = $('chart-zoom-title');
+
+    function close() {
+      overlay.hidden = true;
+      body.innerHTML = '';
+      document.body.classList.remove('is-locked');
+    }
+
+    document.addEventListener('click', function (e) {
+      var btn = e.target.closest('.chart-expand');
+      if (btn) {
+        var panel = btn.closest('.panel');
+        var chart = btn.parentElement.querySelector('svg.chart');
+        if (!chart) return;
+        var heading = panel ? panel.querySelector('.detail-head h3') : null;
+        var section = panel ? panel.querySelector('.panel-head h2') : null;
+        title.textContent = heading
+          ? heading.textContent + ' — plays per month'
+          : (section ? section.textContent : 'Chart');
+        body.innerHTML = chart.outerHTML;
+        overlay.hidden = false;
+        document.body.classList.add('is-locked');
+        $('chart-zoom-close').focus();
+        return;
+      }
+      if (e.target.closest('#chart-zoom-close') || e.target === overlay) close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !overlay.hidden) close();
+    });
   }
 
   /* ---------------------------------------------------------- tooltip -- */

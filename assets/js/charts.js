@@ -87,12 +87,15 @@
 
       var lx = padL + slot * i + slot / 2;
       var ly = padT + plotH + 18;
+      // A year's worth of months fits comfortably; several years of them do
+      // not, so the labels shrink rather than collide.
+      var axisClass = n > 14 ? 'axis axis-dense' : 'axis';
       if (opts.labelAngle) {
-        parts.push('<text class="axis" x="' + lx.toFixed(1) + '" y="' + ly +
+        parts.push('<text class="' + axisClass + '" x="' + lx.toFixed(1) + '" y="' + ly +
           '" text-anchor="end" transform="rotate(-45 ' + lx.toFixed(1) + ' ' + ly + ')">' +
           esc(labels[i]) + '</text>');
       } else if (n <= 32 || i % Math.ceil(n / 24) === 0) {
-        parts.push('<text class="axis" x="' + lx.toFixed(1) + '" y="' + ly +
+        parts.push('<text class="' + axisClass + '" x="' + lx.toFixed(1) + '" y="' + ly +
           '" text-anchor="middle">' + esc(labels[i]) + '</text>');
       }
     }

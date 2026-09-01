@@ -278,7 +278,7 @@
       <div class="habit">
         <span class="habit-value" id="habit-offline">—</span>
         <span class="habit-label">✈️ played offline</span>
-        <span class="habit-detail">Downloads, planes and dead zones.</span>
+        <span class="habit-detail" id="habit-offline-detail"></span>
       </div>
     </div>
     <div class="habit-wide">
@@ -442,7 +442,22 @@
 
   <footer class="report-foot">
     <p>Built from your own export. Nothing here was sent anywhere.</p>
+    <p class="credit">
+      Made by <a href="https://github.com/shayco250" target="_blank" rel="noopener"><strong>Shay</strong></a> ·
+      <a href="https://github.com/shayco250/My-Spotify-Statistics" target="_blank" rel="noopener">Source on GitHub ↗</a>
+    </p>
   </footer>
+</div>
+
+<!-- Full-screen view for a chart that is too small in its column -->
+<div class="zoom-overlay" id="chart-zoom" hidden>
+  <div class="zoom-panel" role="dialog" aria-modal="true" aria-labelledby="chart-zoom-title">
+    <header class="zoom-head">
+      <h2 id="chart-zoom-title">Chart</h2>
+      <button type="button" class="btn btn-quiet" id="chart-zoom-close">Close</button>
+    </header>
+    <div class="zoom-body" id="chart-zoom-body"></div>
+  </div>
 </div>
 
 <script src="assets/js/processing.js"></script>
